@@ -2,6 +2,7 @@
 UI boxes for entering text: WriteBox, MessageSearchBox, PanelSearchBox
 """
 
+import os
 import re
 import shlex
 import shutil
@@ -729,6 +730,29 @@ class WriteBox(urwid.Pile):
         self.is_in_typeahead_mode = False
         self.view.set_footer_text()
 
+    def _expand_attachments(self, content: str) -> Optional[str]:
+        """
+        Upload files referenced by '@attach:<path>' tokens (path runs to the
+        end of the line) and replace each token with a markdown link to the
+        upload. Returns None if any upload fails, aborting the send.
+        """
+        def upload(match: Any) -> str:
+            path = os.path.expanduser(match.group(1).strip())
+            with open(path, "rb") as fp:
+                response = self.model.client.upload_file(fp)
+            if response.get("result") != "success":
+                raise ValueError(response.get("msg", "upload failed"))
+            link = response.get("url") or response.get("uri")
+            if not link:
+                raise ValueError("no URL in upload response")
+            return f"[{os.path.basename(path)}]({link})"
+
+        try:
+            return re.sub(r"@attach:(.+)", upload, content)
+        except (OSError, ValueError) as e:
+            self.view.controller.report_error([f"Attachment failed: {e}"])
+            return None
+
     def keypress(self, size: urwid_Size, key: str) -> Optional[str]:
         if self.is_in_typeahead_mode and not (
             is_command_key("AUTOCOMPLETE", key)
@@ -743,6 +767,11 @@ class WriteBox(urwid.Pile):
 
         if is_command_key("SEND_MESSAGE", key):
             self.send_stop_typing_status()
+            if self.msg_body_edit_enabled:
+                expanded = self._expand_attachments(self.msg_write_box.edit_text)
+                if expanded is None:
+                    return key
+                self.msg_write_box.edit_text = expanded
             if self.compose_box_status == "open_with_stream":
                 if re.fullmatch(r"\s*", self.title_write_box.edit_text):
                     topic = "(no topic)"
