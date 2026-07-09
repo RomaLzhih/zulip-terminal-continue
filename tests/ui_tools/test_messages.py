@@ -1633,13 +1633,13 @@ class TestMessageBox:
                         },
                     ],
                 },
-                " :thumbs_up: Iago   :zulip: You   :heart: Iago  ",
+                " \U0001f44d Iago   :zulip: You   ❤ Iago  ",
                 [
-                    ("reaction", 18),
+                    ("reaction", 8),
                     (None, 1),
                     ("reaction_mine", 13),
                     (None, 1),
-                    ("reaction", 14),
+                    ("reaction", 8),
                 ],
             ),
             case(
@@ -1693,9 +1693,9 @@ class TestMessageBox:
                         },
                     ],
                 },
-                " :heart: Iago   :zulip: Shivam, You  ",
+                " ❤ Iago   :zulip: Shivam, You  ",
                 [
-                    ("reaction", 14),
+                    ("reaction", 8),
                     (None, 1),
                     ("reaction_mine", 21),
                 ],

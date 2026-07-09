@@ -47,6 +47,18 @@ if typing.TYPE_CHECKING:
 MAXIMUM_USERNAMES_VISIBLE = 3
 
 
+def unicode_emoji_from_code(emoji_code: str) -> str:
+    """
+    Translate a Zulip emoji code ('1f389', or '-'-joined for sequences,
+    e.g. '1f1fa-1f1f8') into the rendered unicode character(s).
+    Returns '' if the code is empty or malformed.
+    """
+    try:
+        return "".join(chr(int(part, 16)) for part in emoji_code.split("-"))
+    except ValueError:
+        return ""
+
+
 class _MessageEditState(NamedTuple):
     message_id: int
     old_topic: str
@@ -280,7 +292,14 @@ class MessageBox(urwid.Pile):
                 user_name = self.model._all_users_by_id[user_id]["full_name"]
                 if user_id == my_user_id:
                     user_name = "You"
-                reaction_stats[reaction["emoji_name"]].append((user_id, user_name))
+                # Show unicode reactions as the emoji itself; custom realm
+                # emoji have no unicode form, so keep the :name: text
+                display = ""
+                if reaction.get("reaction_type", "unicode_emoji") == "unicode_emoji":
+                    display = unicode_emoji_from_code(reaction.get("emoji_code", ""))
+                if not display:
+                    display = f":{reaction['emoji_name']}:"
+                reaction_stats[display].append((user_id, user_name))
 
             for reaction, ids in reaction_stats.items():
                 if (my_user_id, "You") in ids:
@@ -292,9 +311,9 @@ class MessageBox(urwid.Pile):
                     "reaction_mine"
                     if my_user_id in [id[0] for id in ids]
                     else "reaction",
-                    f" :{reaction}: {len(ids)} "
+                    f" {reaction} {len(ids)} "
                     if len(reactions) > MAXIMUM_USERNAMES_VISIBLE
-                    else f" :{reaction}: {', '.join([id[1] for id in ids])} ",
+                    else f" {reaction} {', '.join([id[1] for id in ids])} ",
                 )
                 for reaction, ids in reaction_stats.items()
             ]
@@ -433,8 +452,18 @@ class MessageBox(urwid.Pile):
                 # PARAGRAPH, STRIKE-THROUGH
                 markup.extend(cls.soup2markup(element, metadata)[0])
             elif tag == "span" and "emoji" in tag_classes:
-                # EMOJI
-                markup.append(("msg_emoji", tag_text))
+                # EMOJI - rendered as the unicode character(s), with the
+                # :name: text as fallback if the code class is absent/invalid
+                emoji_code = next(
+                    (
+                        c[len("emoji-") :]
+                        for c in tag_classes
+                        if c.startswith("emoji-")
+                    ),
+                    "",
+                )
+                emoji_char = unicode_emoji_from_code(emoji_code)
+                markup.append(("msg_emoji", emoji_char if emoji_char else tag_text))
             elif tag == "span" and ({"katex-display", "katex"} & set(tag_classes)):
                 # MATH TEXT
                 # FIXME: Add html -> urwid client-side logic for rendering KaTex text.
