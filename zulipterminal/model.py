@@ -2126,6 +2126,33 @@ class Model:
             return ""
         return response["msg"]
 
+    def _resync_unread_counts(self) -> None:
+        # Flag/message events that occurred while the previous event queue
+        # was dead were never delivered, so recompute unread counts from
+        # freshly fetched initial_data and repaint every count widget.
+        self.unread_counts = classify_unread_counts(self)
+        controller = self.controller
+        if not hasattr(controller, "view"):
+            return
+        view = controller.view
+        stream_counts = self.unread_counts["streams"]
+        for stream_button in view.stream_w.streams_btn_list:
+            stream_button.update_count(stream_counts.get(stream_button.stream_id, 0))
+        pm_counts = self.unread_counts["unread_pms"]
+        for user_button in view.user_w.users_btn_list:
+            user_button.update_count(pm_counts.get(user_button.user_id, 0))
+        if view.left_panel.is_in_topic_view:
+            stream_id = view.topic_w.stream_button.stream_id
+            topic_counts = self.unread_counts["unread_topics"]
+            for topic_button in view.topic_w.topics_btn_list:
+                topic_button.update_count(
+                    topic_counts.get((stream_id, topic_button.topic_name), 0)
+                )
+        view.home_button.update_count(self.unread_counts["all_msg"])
+        view.pm_button.update_count(self.unread_counts["all_pms"])
+        view.mentioned_button.update_count(self.unread_counts["all_mentions"])
+        controller.update_screen()
+
     @asynch
     def poll_for_events(self) -> None:
         reregister_timeout = 10
@@ -2134,9 +2161,15 @@ class Model:
         while True:
             if queue_id is None:
                 while True:
-                    if not self._register_desired_events():
+                    # Re-fetch data along with the new queue: unread counts
+                    # (and other state) changed while the old queue was dead.
+                    if not self._register_desired_events(fetch_data=True):
                         queue_id = self.queue_id
                         last_event_id = self.last_event_id
+                        try:
+                            self._resync_unread_counts()
+                        except Exception:
+                            pass  # never let a repaint failure kill polling
                         break
                     time.sleep(reregister_timeout)
 
