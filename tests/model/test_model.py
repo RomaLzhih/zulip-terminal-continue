@@ -5002,6 +5002,7 @@ class TestModel:
         mocker.patch(
             MODEL + "._register_desired_events", side_effect=register_return_value
         )
+        resync = mocker.patch(MODEL + "._resync_unread_counts")
         sleep = mocker.patch(MODULE + ".time.sleep")
 
         self.client.get_events.side_effect = [
@@ -5016,7 +5017,10 @@ class TestModel:
         with pytest.raises(self.LoopEnder):
             model.poll_for_events()
 
-        registers = [mocker.call() for _ in range(len(register_return_value))]
+        registers = [
+            mocker.call(fetch_data=True) for _ in range(len(register_return_value))
+        ]
         model._register_desired_events.assert_has_calls(registers)
+        resync.assert_called_once_with()
         assert self.client.get_events.called
         assert sleep.call_count == len(registers) - 1
