@@ -31,11 +31,37 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
 - `ui_tools/boxes.py: WriteBox._expand_attachments` — `@attach:<path>` token
   in the compose box (path runs to end of line, `~` expanded) uploads the file
   on send and becomes a markdown link; failed upload aborts the send with a
-  footer error.
+  footer error. Documented for users in the Help menu via an "Attachments"
+  category appended in `ui_tools/views.py: HelpView.__init__` (it is a compose
+  token, not a keybinding, so it is not in `KEY_BINDINGS`).
 - `ui_tools/messages.py: unicode_emoji_from_code` — message-body emoji spans
   and unicode reactions render as real emoji glyphs; custom realm emoji keep
   the `:name:` text form. No variation selectors (VS16) — they break urwid's
   width math.
+- `ui_tools/boxes.py: WriteBox._refresh_autocomplete_footer_preview` — live
+  autocomplete preview in the message body: as you type a `@`/`#`/`:` token
+  (the whitespace-delimited word at the cursor), candidates appear in the
+  footer automatically, without pressing AUTOCOMPLETE (ctrl f). The preview
+  lists matches with nothing selected (`state=None`); ctrl f still cycles and
+  inserts as before. Wired from `WriteBox.keypress` after the child edit box
+  handles the key (skipped for the AUTOCOMPLETE keys so it can't clobber the
+  highlighted selection).
+- `ui_tools/boxes.py: WriteBox.autocomplete_users` — when composing to a stream
+  (`compose_box_status == "open_with_stream"`), `@`-mention suggestions are
+  filtered to that channel's subscribers (`recipient_user_ids`); non-members are
+  hidden since mentioning them does not notify. Private compose is unaffected
+  (shows all users).
+- `ui_tools/boxes.py: VimEditBox` — the message body is a modal (vim-like)
+  editor. Starts in **insert** mode (types exactly like `ReadlineEdit`); `esc`
+  enters **normal** mode, a second `esc` exits compose (`esc` handling lives in
+  `WriteBox.keypress`, since it intercepts `EXIT_COMPOSE` before the child).
+  Normal mode maps a basic subset onto ReadlineEdit primitives: `h j k l w b
+  0 $ gg G`, `i a I A o O`, `x D dd dw C u p`, and the `c` change operator
+  (`cc cw cb c$ c0` = delete + enter insert); unknown keys are swallowed. The
+  footer shows a `NORMAL` indicator (`WriteBox._set_vim_normal_mode_footer` /
+  `_update_message_body_footer`). Only `msg_write_box` is a `VimEditBox`; the
+  To/topic/stream header boxes stay plain `ReadlineEdit`. Documented for users
+  in the Help menu ("Compose: Vim mode" category in `HelpView.__init__`).
 
 ## Testing
 

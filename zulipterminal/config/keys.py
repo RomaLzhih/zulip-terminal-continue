@@ -196,7 +196,7 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
     },
     'EXIT_COMPOSE': {
         'keys': ['esc'],
-        'help_text': 'Exit message compose box',
+        'help_text': 'Exit compose box (in the body, first enters vim normal mode)',
         'key_category': 'compose_box',
     },
     'REACTION_AGREEMENT': {

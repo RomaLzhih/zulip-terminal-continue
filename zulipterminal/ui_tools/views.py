@@ -1273,6 +1273,55 @@ class HelpView(PopUpView):
 
             help_menu_content.append((HELP_CATEGORIES[category], key_bindings))
 
+        # Fork feature: `@attach:` is a compose-box token, not a keybinding, so
+        # it is documented here rather than via KEY_BINDINGS. See
+        # WriteBox._expand_attachments.
+        help_menu_content.append(
+            (
+                "Attachments",
+                [
+                    (
+                        "Upload a local file on send (becomes a Markdown link)",
+                        "@attach:<path>",
+                    ),
+                    (
+                        "Path runs to the end of the line; ~ is expanded",
+                        "@attach:~/report.pdf",
+                    ),
+                    (
+                        "Attach several files, one token per line",
+                        "@attach:<path>",
+                    ),
+                    (
+                        "A failed upload aborts the send with a footer error",
+                        "",
+                    ),
+                ],
+            )
+        )
+
+        # Fork feature: the message body is a modal (vim-like) editor. These are
+        # not keybindings in KEY_BINDINGS; see VimEditBox in ui_tools/boxes.py.
+        help_menu_content.append(
+            (
+                "Compose: Vim mode (message body)",
+                [
+                    ("Enter normal mode / exit compose from normal mode", "esc"),
+                    ("Enter insert mode (at / after cursor)", "i / a"),
+                    ("Insert at line start / end", "I / A"),
+                    ("Open a new line below / above and insert", "o / O"),
+                    ("Move left / down / up / right", "h j k l"),
+                    ("Move by word forward / back", "w / b"),
+                    ("Move to line start / end", "0 / $"),
+                    ("Move to start / end of message", "gg / G"),
+                    ("Delete char / to end of line", "x / D"),
+                    ("Delete line / word", "dd / dw"),
+                    ("Change line / word / to end of line", "cc / cw / C"),
+                    ("Undo / paste", "u / p"),
+                ],
+            )
+        )
+
         popup_width, column_widths = self.calculate_table_widths(
             help_menu_content, len(title)
         )

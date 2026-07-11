@@ -66,6 +66,146 @@ class _MessageEditState(NamedTuple):
 
 DELIMS_MESSAGE_COMPOSE = "\t\n;"
 
+# Leading characters of a message-body token that trigger live autocomplete
+# suggestions in the footer (mentions, streams, emojis) as the user types.
+AUTOCOMPLETE_PREFIX_CHARS: Final = ("@", "#", ":")
+
+# One-line reminder of the supported normal-mode commands, shown in the footer.
+VIM_NORMAL_MODE_HINT: Final = (
+    "  i:insert  esc:exit  h j k l  w b  0 $  gg G  a A o O  x dd dw cc cw D C  u p"
+)
+
+
+class VimEditBox(ReadlineEdit):
+    """
+    Multiline edit box with a basic modal (vim-like) editing mode.
+
+    Starts in "insert" mode, where it behaves exactly like ReadlineEdit.  The
+    enclosing WriteBox switches it to "normal" mode on ESC; normal mode maps a
+    basic subset of vim motions and operators onto ReadlineEdit's existing
+    editing primitives. Unrecognized keys are swallowed in normal mode so stray
+    keystrokes cannot insert text or navigate away from the compose box.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.vim_mode = "insert"
+        # First key of a pending two-key sequence ("d" or "g"), else None.
+        self._vim_pending: Optional[str] = None
+
+    def enter_insert_mode(self) -> None:
+        self.vim_mode = "insert"
+        self._vim_pending = None
+
+    def enter_normal_mode(self) -> None:
+        self.vim_mode = "normal"
+        self._vim_pending = None
+
+    def keypress(self, size: urwid_Size, key: str) -> Optional[str]:
+        if self.vim_mode != "normal":
+            return super().keypress(size, key)
+        # Motions such as next_line/end_of_line rely on self.size, which is
+        # normally refreshed by ReadlineEdit.keypress; set it here too.
+        self.size = size
+        return self._normal_mode_keypress(key)
+
+    def _normal_mode_keypress(self, key: str) -> Optional[str]:
+        pending = self._vim_pending
+        self._vim_pending = None
+
+        if pending in ("d", "c"):
+            # operator-pending: d/c + motion deletes that text; c ("change")
+            # then enters insert mode. "dd"/"cc" act on the whole line.
+            if key == pending:
+                self.kill_whole_line()
+            elif key == "w":
+                self.kill_word()
+            elif key == "b":
+                self.backward_kill_word()
+            elif key == "$":
+                self.forward_kill_line()
+            elif key == "0":
+                self.backward_kill_line()
+            else:
+                # Unrecognized motion cancels the operator without editing.
+                return None
+            if pending == "c":
+                self.enter_insert_mode()
+            self._invalidate()
+            return None
+        if pending == "g":
+            if key == "g":
+                self.set_edit_pos(0)
+            self._invalidate()
+            return None
+
+        # Motions
+        if key in ("h", "left"):
+            self.backward_char()
+        elif key in ("l", "right"):
+            self.forward_char()
+        elif key in ("j", "down"):
+            self.next_line()
+        elif key in ("k", "up"):
+            self.previous_line()
+        elif key == "w":
+            self.forward_word()
+        elif key in ("e",):
+            self.forward_word()
+        elif key == "b":
+            self.backward_word()
+        elif key in ("0", "^", "home"):
+            self.beginning_of_line()
+        elif key in ("$", "end"):
+            self.end_of_line()
+        elif key == "G":
+            self.set_edit_pos(len(self.edit_text))
+        # Enter insert mode
+        elif key == "i":
+            self.enter_insert_mode()
+        elif key == "a":
+            self.forward_char()
+            self.enter_insert_mode()
+        elif key == "I":
+            self.beginning_of_line()
+            self.enter_insert_mode()
+        elif key == "A":
+            self.end_of_line()
+            self.enter_insert_mode()
+        elif key == "o":
+            self.end_of_line()
+            self.insert_text("\n")
+            self.enter_insert_mode()
+        elif key == "O":
+            self.beginning_of_line()
+            self.insert_text("\n")
+            self.backward_char()
+            self.enter_insert_mode()
+        # Edits
+        elif key == "x":
+            self.delete_char()
+        elif key == "D":
+            self.forward_kill_line()
+        elif key == "C":
+            self.forward_kill_line()
+            self.enter_insert_mode()
+        elif key == "s":
+            self.delete_char()
+            self.enter_insert_mode()
+        elif key == "u":
+            self.undo()
+        elif key == "p":
+            self.paste()
+        # Start of a two-key operator/sequence
+        elif key in ("d", "c"):
+            self._vim_pending = key
+        elif key == "g":
+            self._vim_pending = "g"
+        # Any other key is swallowed to keep normal mode self-contained.
+
+        self._invalidate()
+        return None
+
 
 class WriteBox(urwid.Pile):
     def __init__(self, view: Any) -> None:
@@ -84,6 +224,8 @@ class WriteBox(urwid.Pile):
         self.msg_body_edit_enabled: bool
 
         self.is_in_typeahead_mode = False
+        # Whether the footer currently shows the vim NORMAL-mode indicator.
+        self._vim_normal_footer_shown = False
 
         # Set to int for stream box only
         self.stream_id: Optional[int]
@@ -218,7 +360,7 @@ class WriteBox(urwid.Pile):
         )
         self.to_write_box.set_completer_delims("")
 
-        self.msg_write_box = ReadlineEdit(
+        self.msg_write_box = VimEditBox(
             multiline=True, max_char=self.model.max_message_length
         )
         self.msg_write_box.enable_autocomplete(
@@ -335,7 +477,7 @@ class WriteBox(urwid.Pile):
         self.recipient_user_ids = self.model.get_other_subscribers_in_stream(
             stream_id=stream_id
         )
-        self.msg_write_box = ReadlineEdit(
+        self.msg_write_box = VimEditBox(
             multiline=True, max_char=self.model.max_message_length
         )
         self.msg_write_box.enable_autocomplete(
@@ -565,6 +707,15 @@ class WriteBox(urwid.Pile):
         ]
         matching_ids = {user["user_id"] for user in matching_users}
         matching_recipient_ids = set(self.recipient_user_ids) & set(matching_ids)
+        # When composing to a stream, only suggest its subscribers: mentioning
+        # someone who is not in the channel does not notify them, so hide them.
+        # (recipient_user_ids holds the stream's other subscribers here.)
+        if self.compose_box_status == "open_with_stream":
+            matching_users = [
+                user
+                for user in matching_users
+                if user["user_id"] in matching_recipient_ids
+            ]
         # Display subscribed users/recipients first.
         sorted_matching_users = sorted(
             matching_users,
@@ -730,6 +881,58 @@ class WriteBox(urwid.Pile):
         self.is_in_typeahead_mode = False
         self.view.set_footer_text()
 
+    def _refresh_autocomplete_footer_preview(self) -> None:
+        """
+        Show autocomplete candidates in the footer as the user types a mention,
+        stream, or emoji token in the message body, without waiting for the
+        AUTOCOMPLETE key. The token is the whitespace-delimited word ending at
+        the cursor; if it opens with a recognized prefix we let
+        generic_autocomplete populate the footer with state=None, which lists
+        the matches without selecting one (a preview). Pressing AUTOCOMPLETE
+        then cycles through and inserts them as before.
+        """
+        if not self.msg_body_edit_enabled:
+            return
+        text_before_caret = self.msg_write_box.edit_text[: self.msg_write_box.edit_pos]
+        token = re.split(r"\s", text_before_caret)[-1]
+        if token[:1] in AUTOCOMPLETE_PREFIX_CHARS:
+            self.generic_autocomplete(token, None)
+        elif self.is_in_typeahead_mode:
+            self._set_default_footer_after_autocomplete()
+
+    def _msg_box_focused(self) -> bool:
+        """Whether the message body box is the currently focused compose box."""
+        return (
+            self.msg_body_edit_enabled
+            and len(self.contents) > 0
+            and self.focus_position == self.FOCUS_CONTAINER_MESSAGE
+        )
+
+    def _set_vim_normal_mode_footer(self) -> None:
+        self.is_in_typeahead_mode = False
+        self._vim_normal_footer_shown = True
+        self.view.set_footer_text(
+            [("footer_contrast", " NORMAL "), VIM_NORMAL_MODE_HINT]
+        )
+
+    def _update_message_body_footer(self, is_autocomplete_key: bool) -> None:
+        """
+        Keep the footer in sync with the message body after a keypress: show the
+        vim NORMAL-mode indicator in normal mode, otherwise the live autocomplete
+        preview. Skipped for the AUTOCOMPLETE keys, which set the footer (with a
+        selection) themselves.
+        """
+        if is_autocomplete_key or not self._msg_box_focused():
+            return
+        if self.msg_write_box.vim_mode == "normal":
+            if not self._vim_normal_footer_shown:
+                self._set_vim_normal_mode_footer()
+        else:
+            if self._vim_normal_footer_shown:
+                self._vim_normal_footer_shown = False
+                self._set_default_footer_after_autocomplete()
+            self._refresh_autocomplete_footer_preview()
+
     def _expand_attachments(self, content: str) -> Optional[str]:
         """
         Upload files referenced by '@attach:<path>' tokens (path runs to the
@@ -754,16 +957,28 @@ class WriteBox(urwid.Pile):
             return None
 
     def keypress(self, size: urwid_Size, key: str) -> Optional[str]:
-        if self.is_in_typeahead_mode and not (
-            is_command_key("AUTOCOMPLETE", key)
-            or is_command_key("AUTOCOMPLETE_REVERSE", key)
-        ):
+        is_autocomplete_key = is_command_key("AUTOCOMPLETE", key) or is_command_key(
+            "AUTOCOMPLETE_REVERSE", key
+        )
+        if self.is_in_typeahead_mode and not is_autocomplete_key:
             # As is, this exits autocomplete even if the user chooses to resume compose.
             # Including a check for "EXIT_COMPOSE" in the above logic would avoid
             # resetting the footer until actually exiting compose, but autocomplete
             # itself does not continue on resume with such a solution.
             # TODO: Fully implement resuming of autocomplete upon resuming compose.
             self._set_default_footer_after_autocomplete()
+
+        # Vim mode: ESC in the message body switches insert -> normal rather than
+        # exiting compose; only exit once already in normal mode (or when a header
+        # box is focused, handled by the EXIT_COMPOSE branch below).
+        if (
+            is_command_key("EXIT_COMPOSE", key)
+            and self._msg_box_focused()
+            and self.msg_write_box.vim_mode == "insert"
+        ):
+            self.msg_write_box.enter_normal_mode()
+            self._set_vim_normal_mode_footer()
+            return None
 
         if is_command_key("SEND_MESSAGE", key):
             self.send_stop_typing_status()
@@ -1016,6 +1231,12 @@ class WriteBox(urwid.Pile):
                 header.focus_col = self.FOCUS_HEADER_BOX_RECIPIENT
 
         key = super().keypress(size, key)
+
+        # After the child edit box has processed the key, keep the footer in
+        # sync with the message body (vim NORMAL indicator or live autocomplete
+        # preview).
+        self._update_message_body_footer(is_autocomplete_key)
+
         return key
 
 

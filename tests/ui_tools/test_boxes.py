@@ -28,6 +28,7 @@ from zulipterminal.helper import Index, MinimalUserData
 from zulipterminal.ui_tools.boxes import (
     MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP,
     PanelSearchBox,
+    VimEditBox,
     WriteBox,
     _MessageEditState,
 )
@@ -257,6 +258,9 @@ class TestWriteBox:
             MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP - 1
         )
 
+        # In vim mode, ESC from the message body first enters normal mode; the
+        # compose box only exits on ESC once already in normal mode.
+        write_box.msg_write_box.enter_normal_mode()
         size = widget_size(write_box)
         write_box.keypress(size, key)
 
@@ -280,6 +284,8 @@ class TestWriteBox:
 
         write_box.msg_write_box.edit_text = "." * MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP
 
+        # ESC exits (and here triggers the popup) only from vim normal mode.
+        write_box.msg_write_box.enter_normal_mode()
         size = widget_size(write_box)
         write_box.keypress(size, key)
 
@@ -300,6 +306,9 @@ class TestWriteBox:
             MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP - 1
         )
 
+        # In vim mode, ESC from the message body first enters normal mode; the
+        # compose box only exits on ESC once already in normal mode.
+        write_box.msg_write_box.enter_normal_mode()
         size = widget_size(write_box)
         write_box.keypress(size, key)
 
@@ -321,6 +330,8 @@ class TestWriteBox:
 
         write_box.msg_write_box.edit_text = "." * MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP
 
+        # ESC exits (and here triggers the popup) only from vim normal mode.
+        write_box.msg_write_box.enter_normal_mode()
         size = widget_size(write_box)
         write_box.keypress(size, key)
 
@@ -651,6 +662,205 @@ class TestWriteBox:
         write_box.view.set_typeahead_footer.assert_called_once_with(
             footer_text, state, False
         )
+
+    @pytest.mark.parametrize(
+        "text_before_caret, inserted_key, expected_edit_text, expected_suggestion",
+        [
+            ("@Huma", "n", "@Human", "Human Myself"),
+            ("@_Huma", "n", "@_Human", "Human Myself"),
+            ("@Grou", "p", "@Group", "Group 1"),
+            (":smil", "e", ":smile", "smile"),
+        ],
+    )
+    def test_keypress_message_body_shows_autocomplete_preview(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        text_before_caret: str,
+        inserted_key: str,
+        expected_edit_text: str,
+        expected_suggestion: str,
+    ) -> None:
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        # Treat every user as a subscriber of this stream so the channel-only
+        # mention filter is a no-op here (these tests cover preview mechanics).
+        write_box.recipient_user_ids = [
+            user["user_id"] for user in write_box.view.users
+        ]
+        write_box.focus_position = write_box.FOCUS_CONTAINER_MESSAGE
+        write_box.msg_write_box.set_edit_text(text_before_caret)
+        write_box.msg_write_box.set_edit_pos(len(text_before_caret))
+        size = widget_size(write_box)
+
+        write_box.keypress(size, inserted_key)
+
+        # The typed character is inserted and candidates are previewed in the
+        # footer without pressing the AUTOCOMPLETE key.
+        assert write_box.msg_write_box.edit_text == expected_edit_text
+        assert write_box.is_in_typeahead_mode is True
+        suggestions, state, _ = write_box.view.set_typeahead_footer.call_args[0]
+        # state is None so no candidate is selected yet (a preview only).
+        assert state is None
+        assert expected_suggestion in suggestions
+
+    def test_keypress_message_body_no_preview_without_prefix(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        write_box.focus_position = write_box.FOCUS_CONTAINER_MESSAGE
+        write_box.msg_write_box.set_edit_text("hello worl")
+        write_box.msg_write_box.set_edit_pos(len("hello worl"))
+        size = widget_size(write_box)
+        write_box.view.set_typeahead_footer.reset_mock()
+
+        write_box.keypress(size, "d")
+
+        assert write_box.msg_write_box.edit_text == "hello world"
+        assert write_box.is_in_typeahead_mode is False
+        write_box.view.set_typeahead_footer.assert_not_called()
+
+    def test_keypress_AUTOCOMPLETE_not_overridden_by_preview(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        # Treat every user as a subscriber of this stream so the channel-only
+        # mention filter is a no-op here (these tests cover preview mechanics).
+        write_box.recipient_user_ids = [
+            user["user_id"] for user in write_box.view.users
+        ]
+        write_box.focus_position = write_box.FOCUS_CONTAINER_MESSAGE
+        write_box.msg_write_box.set_edit_text("@Human")
+        write_box.msg_write_box.set_edit_pos(len("@Human"))
+        size = widget_size(write_box)
+
+        write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+
+        # The AUTOCOMPLETE key still selects/inserts a candidate, and the live
+        # preview does not clobber the highlighted footer selection afterwards.
+        assert write_box.msg_write_box.edit_text == "@**Human Myself**"
+        _, state, _ = write_box.view.set_typeahead_footer.call_args[0]
+        assert state == 0
+
+    def _open_stream_compose_focused_on_body(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+    ) -> None:
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        write_box.focus_position = write_box.FOCUS_CONTAINER_MESSAGE
+
+    def test_keypress_ESC_enters_vim_normal_mode(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        self._open_stream_compose_focused_on_body(mocker, write_box)
+        write_box.msg_write_box.set_edit_text("hi")
+        size = widget_size(write_box)
+
+        returned = write_box.keypress(size, "esc")
+
+        # ESC from the body enters normal mode and does NOT exit the compose box.
+        assert returned is None
+        assert write_box.msg_write_box.vim_mode == "normal"
+        assert write_box.compose_box_status == "open_with_stream"
+        footer_markup = write_box.view.set_footer_text.call_args[0][0]
+        assert any("NORMAL" in str(part) for part in footer_markup)
+
+    def test_keypress_ESC_in_normal_mode_exits_compose(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        self._open_stream_compose_focused_on_body(mocker, write_box)
+        write_box.msg_write_box.enter_normal_mode()
+        size = widget_size(write_box)
+
+        write_box.keypress(size, "esc")
+
+        # A second ESC (now in normal mode) exits the compose box as before.
+        assert write_box.compose_box_status == "closed"
+
+    def test_keypress_i_returns_to_insert_mode(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        self._open_stream_compose_focused_on_body(mocker, write_box)
+        write_box.msg_write_box.enter_normal_mode()
+        write_box._vim_normal_footer_shown = True
+        size = widget_size(write_box)
+
+        write_box.keypress(size, "i")
+
+        assert write_box.msg_write_box.vim_mode == "insert"
+        assert write_box._vim_normal_footer_shown is False
+
+    def test_keypress_normal_mode_edits_via_write_box(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        self._open_stream_compose_focused_on_body(mocker, write_box)
+        write_box.msg_write_box.set_edit_text("hello")
+        write_box.msg_write_box.set_edit_pos(0)
+        write_box.msg_write_box.enter_normal_mode()
+        size = widget_size(write_box)
+
+        write_box.keypress(size, "x")
+
+        # In normal mode, 'x' deletes rather than inserting the character.
+        assert write_box.msg_write_box.edit_text == "ello"
+        assert write_box.msg_write_box.vim_mode == "normal"
+
+    @pytest.mark.parametrize(
+        "compose_status, subscriber_ids, expected_names",
+        [
+            # Composing to a stream: only its subscribers are suggested.
+            ("open_with_stream", [11], ["Human 1"]),
+            ("open_with_stream", [11, 12], ["Human 1", "Human 2"]),
+            ("open_with_stream", [], []),
+            # Outside a stream, every match is suggested (filter not applied).
+            (
+                "open_with_private",
+                [],
+                ["Human Myself", "Human 1", "Human 2", "Human Duplicate", "Human Duplicate"],
+            ),
+            (
+                "closed",
+                [],
+                ["Human Myself", "Human 1", "Human 2", "Human Duplicate", "Human Duplicate"],
+            ),
+        ],
+    )
+    def test_autocomplete_users_only_channel_members_for_stream(
+        self,
+        write_box: WriteBox,
+        compose_status: str,
+        subscriber_ids: List[int],
+        expected_names: List[str],
+    ) -> None:
+        write_box.compose_box_status = compose_status
+        write_box.recipient_user_ids = subscriber_ids
+
+        _, user_names = write_box.autocomplete_users("@Human", "@")
+
+        assert user_names == expected_names
 
     @pytest.mark.parametrize(
         "text, state, required_typeahead",
@@ -1832,6 +2042,86 @@ class TestWriteBox:
             write_box.private_box_view(recipient_user_ids=[1])
 
         assert len(write_box.header_write_box.widget_list) == expected_box_size
+
+
+class TestVimEditBox:
+    SIZE = (20,)
+
+    @pytest.mark.parametrize(
+        "text, start_pos, keys, expected_text, expected_pos, expected_mode",
+        [
+            # Motions leave the text unchanged and stay in normal mode.
+            ("hello", 0, ["l"], "hello", 1, "normal"),
+            ("hello", 2, ["h"], "hello", 1, "normal"),
+            ("hello world", 3, ["0"], "hello world", 0, "normal"),
+            ("hello world", 3, ["$"], "hello world", 11, "normal"),
+            ("hello world", 0, ["w"], "hello world", 6, "normal"),
+            ("hello world", 8, ["b"], "hello world", 6, "normal"),
+            ("hello", 2, ["G"], "hello", 5, "normal"),
+            ("hello", 2, ["g", "g"], "hello", 0, "normal"),
+            ("ab\ncd", 0, ["j"], "ab\ncd", 3, "normal"),
+            # Edits.
+            ("hello", 1, ["x"], "hllo", 1, "normal"),
+            ("hello world", 0, ["d", "w"], "world", 0, "normal"),
+            ("hello world", 0, ["d", "d"], "", 0, "normal"),
+            ("hello world", 6, ["D"], "hello ", 6, "normal"),
+            # The change operator (c) deletes like d, then enters insert mode.
+            ("hello world", 0, ["c", "w"], "world", 0, "insert"),
+            ("hello world", 0, ["c", "c"], "", 0, "insert"),
+            ("hello world", 6, ["c", "$"], "hello ", 6, "insert"),
+            # c followed by an unrecognized motion cancels without editing.
+            ("hello world", 0, ["c", "z"], "hello world", 0, "normal"),
+            # Entering insert mode positions the cursor and switches mode.
+            ("hello", 2, ["i"], "hello", 2, "insert"),
+            ("hello", 2, ["a"], "hello", 3, "insert"),
+            ("hello", 2, ["I"], "hello", 0, "insert"),
+            ("hello", 2, ["A"], "hello", 5, "insert"),
+            ("ab", 0, ["o"], "ab\n", 3, "insert"),
+            ("ab", 1, ["O"], "\nab", 0, "insert"),
+            # Unmapped keys are swallowed: no insertion, still normal mode.
+            ("hello", 2, ["z"], "hello", 2, "normal"),
+            ("hello", 2, ["1"], "hello", 2, "normal"),
+        ],
+    )
+    def test_normal_mode_keys(
+        self,
+        text: str,
+        start_pos: int,
+        keys: List[str],
+        expected_text: str,
+        expected_pos: int,
+        expected_mode: str,
+    ) -> None:
+        box = VimEditBox(multiline=True, edit_text=text)
+        box.set_edit_pos(start_pos)
+        box.enter_normal_mode()
+
+        for key in keys:
+            box.keypress(self.SIZE, key)
+
+        assert box.edit_text == expected_text
+        assert box.edit_pos == expected_pos
+        assert box.vim_mode == expected_mode
+
+    def test_starts_in_insert_mode_and_types_normally(self) -> None:
+        box = VimEditBox(multiline=True)
+        assert box.vim_mode == "insert"
+
+        for key in "hi":
+            box.keypress(self.SIZE, key)
+
+        assert box.edit_text == "hi"
+
+    def test_insert_mode_after_i_types_normally(self) -> None:
+        box = VimEditBox(multiline=True, edit_text="ac")
+        box.set_edit_pos(1)
+        box.enter_normal_mode()
+
+        box.keypress(self.SIZE, "i")
+        box.keypress(self.SIZE, "b")
+
+        assert box.edit_text == "abc"
+        assert box.vim_mode == "insert"
 
 
 class TestPanelSearchBox:
