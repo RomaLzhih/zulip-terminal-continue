@@ -36,6 +36,12 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   screen, and events stopped until restart. `_resync_unread_counts` now also
   calls `loop.screen.clear()` so the first draw after reconnect repaints
   every cell (auto ctrl-l), wiping any stray terminal output.
+- `helper.py: set_count` / `_recount_aggregate_unreads` — the aggregate
+  counts (`all_msg`, `all_pms`) are recomputed from the per-conversation
+  keyed counts (same muting rules as `classify_unread_counts`) on every
+  count change, instead of drifting via incremental `+= / -=` in
+  `_set_count_in_view`. Fixes "All messages" showing phantom unreads after
+  all streams/PMs were read.
 - `ui_tools/boxes.py: WriteBox._expand_attachments` — `@attach:<path>` token
   in the compose box (path runs to end of line, `~` expanded) uploads the file
   on send and becomes a markdown link; failed upload aborts the send with a
