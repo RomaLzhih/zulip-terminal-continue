@@ -28,6 +28,14 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
 - `model.py: Model._resync_unread_counts` — after a dead event queue is
   re-registered (post-sleep), re-register with `fetch_data=True` and repaint
   all unread-count widgets. Fixes counts frozen until restart.
+- `model.py: poll_for_events` / `_start_presence_updates` — network errors
+  from `get_events` / the presence ping are caught and retried instead of
+  killing the daemon thread. Post-sleep, a dead socket raises
+  `zulip.UnrecoverableNetworkError` (no retry in the client); previously the
+  thread died, its traceback hit stderr (uncaptured) and corrupted the urwid
+  screen, and events stopped until restart. `_resync_unread_counts` now also
+  calls `loop.screen.clear()` so the first draw after reconnect repaints
+  every cell (auto ctrl-l), wiping any stray terminal output.
 - `ui_tools/boxes.py: WriteBox._expand_attachments` — `@attach:<path>` token
   in the compose box (path runs to end of line, `~` expanded) uploads the file
   on send and becomes a markdown link; failed upload aborts the send with a
