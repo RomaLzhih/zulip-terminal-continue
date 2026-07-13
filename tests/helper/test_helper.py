@@ -8,6 +8,7 @@ from zulipterminal.api_types import Composition
 from zulipterminal.config.keys import primary_display_key_for_command
 from zulipterminal.helper import (
     Index,
+    UnreadCounts,
     canonicalize_color,
     classify_unread_counts,
     display_error_if_present,
@@ -19,6 +20,7 @@ from zulipterminal.helper import (
     open_media,
     powerset,
     process_media,
+    set_count,
     sort_unread_topics,
 )
 
@@ -333,6 +335,78 @@ def test_classify_unread_counts(
     assert classify_unread_counts(model) == dict(
         classified_unread_counts, **vary_in_unreads
     )
+
+
+def _controller_for_set_count(mocker: MockerFixture) -> Any:
+    controller = mocker.Mock()
+    model = controller.model
+    model.user_id = 1
+    model.muted_streams = set()
+    model.is_muted_stream.return_value = False
+    model.is_muted_topic.return_value = False
+    model.index = {
+        "messages": {
+            10: {
+                "id": 10,
+                "type": "stream",
+                "stream_id": 205,
+                "subject": "Some topic",
+                "sender_id": 2,
+                "flags": [],
+            }
+        }
+    }
+    model.unread_counts = UnreadCounts(
+        all_msg=5,  # drifted: per-conversation counts add up to 3
+        all_pms=1,
+        all_mentions=0,
+        unread_topics={(205, "Some topic"): 2},
+        unread_pms={2: 1},
+        unread_huddles={},
+        streams={205: 2},
+    )
+    controller.view.left_panel.is_in_topic_view = False
+    controller.view.stream_w.streams_btn_list = []
+    controller.view.user_w.users_btn_list = []
+    return controller
+
+
+def test_set_count_derives_aggregates_from_conversation_counts(
+    mocker: MockerFixture,
+) -> None:
+    # all_msg/all_pms are recomputed from the per-conversation counts on
+    # every change, so pre-existing drift in the aggregates (previously
+    # adjusted incrementally, persisting until restart) is corrected.
+    controller = _controller_for_set_count(mocker)
+
+    set_count([10], controller, -1)
+
+    unread_counts = controller.model.unread_counts
+    assert unread_counts["unread_topics"] == {(205, "Some topic"): 1}
+    assert unread_counts["all_msg"] == 2  # 1 stream + 1 pm, not 5 - 1
+    assert unread_counts["all_pms"] == 1
+    controller.view.home_button.update_count.assert_called_once_with(2)
+    controller.view.pm_button.update_count.assert_called_once_with(1)
+
+
+def test_set_count_aggregates_exclude_muted(mocker: MockerFixture) -> None:
+    # Muted streams and muted topics stay out of all_msg, as in
+    # classify_unread_counts.
+    controller = _controller_for_set_count(mocker)
+    model = controller.model
+    model.muted_streams = {99}
+    model.is_muted_topic.side_effect = (
+        lambda stream_id, topic: topic == "Muted topic"
+    )
+    model.unread_counts["unread_topics"].update(
+        {(99, "Other topic"): 4, (205, "Muted topic"): 3}
+    )
+
+    set_count([10], controller, -1)
+
+    unread_counts = controller.model.unread_counts
+    assert unread_counts["all_msg"] == 2  # 1 non-muted stream + 1 pm
+    controller.view.home_button.update_count.assert_called_once_with(2)
 
 
 @pytest.mark.parametrize(

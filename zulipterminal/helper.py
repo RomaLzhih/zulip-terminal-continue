@@ -219,6 +219,28 @@ def _set_count_in_model(
             )
 
 
+def _recount_aggregate_unreads(model: Any, unread_counts: UnreadCounts) -> None:
+    """
+    Derive the aggregate counts from the per-conversation ones, using the
+    same rules as classify_unread_counts. Adjusting the aggregates
+    incrementally alongside the per-conversation counts lets any missed
+    or duplicated flag event skew them apart permanently (eg. 'All
+    messages' remaining non-zero when every stream and PM shows zero),
+    so recompute them on every change instead.
+    """
+    pm_count = sum(unread_counts["unread_pms"].values()) + sum(
+        unread_counts["unread_huddles"].values()
+    )
+    stream_count = sum(
+        count
+        for (stream_id, topic), count in unread_counts["unread_topics"].items()
+        if stream_id not in model.muted_streams
+        and not model.is_muted_topic(stream_id, topic)
+    )
+    unread_counts["all_pms"] = pm_count
+    unread_counts["all_msg"] = pm_count + stream_count
+
+
 def _set_count_in_view(
     controller: Any,
     new_count: int,
@@ -227,9 +249,8 @@ def _set_count_in_view(
 ) -> None:
     """
     This function for the most part contains the logic for setting the
-    count in the UI buttons. The later buttons (all_msg, all_pms)
-    additionally set the current count in the model and make use of the
-    same in the UI.
+    count in the UI buttons. The aggregate buttons (all_msg, all_pms)
+    display the model counts derived in _recount_aggregate_unreads.
     """
     stream_buttons_list = controller.view.stream_w.streams_btn_list
     is_open_topic_view = controller.view.left_panel.is_in_topic_view
@@ -248,7 +269,6 @@ def _set_count_in_view(
             continue
 
         msg_type = message["type"]
-        add_to_counts = True
         if {"mentioned", "wildcard_mentioned"} & set(message["flags"]):
             unread_counts["all_mentions"] += new_count
             all_mentioned.update_count(unread_counts["all_mentions"])
@@ -256,16 +276,12 @@ def _set_count_in_view(
         if msg_type == "stream":
             stream_id = message["stream_id"]
             msg_topic = message["subject"]
-            if controller.model.is_muted_stream(stream_id):
-                add_to_counts = False  # if muted, don't add to eg. all_msg
-            else:
+            if not controller.model.is_muted_stream(stream_id):
                 for stream_button in stream_buttons_list:
                     if stream_button.stream_id == stream_id:
                         stream_button.update_count(stream_button.count + new_count)
                         break
             # FIXME: Update unread_counts['unread_topics']?
-            if controller.model.is_muted_topic(stream_id, msg_topic):
-                add_to_counts = False
             if is_open_topic_view and stream_id == toggled_stream_id:
                 # If topic_view is open for incoming messages's stream,
                 # We update the respective TopicButton count accordingly.
@@ -277,12 +293,9 @@ def _set_count_in_view(
                 if user_button.user_id == user_id:
                     user_button.update_count(user_button.count + new_count)
                     break
-            unread_counts["all_pms"] += new_count
-            all_pm.update_count(unread_counts["all_pms"])
 
-        if add_to_counts:
-            unread_counts["all_msg"] += new_count
-            all_msg.update_count(unread_counts["all_msg"])
+    all_pm.update_count(unread_counts["all_pms"])
+    all_msg.update_count(unread_counts["all_msg"])
 
 
 def set_count(id_list: List[int], controller: Any, new_count: int) -> None:
@@ -293,6 +306,7 @@ def set_count(id_list: List[int], controller: Any, new_count: int) -> None:
     unread_counts: UnreadCounts = controller.model.unread_counts
     changed_messages = [messages[id] for id in id_list]
     _set_count_in_model(new_count, changed_messages, unread_counts)
+    _recount_aggregate_unreads(controller.model, unread_counts)
 
     # if view is not yet loaded. Usually the case when first message is read.
     while not hasattr(controller, "view"):
