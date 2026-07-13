@@ -443,7 +443,13 @@ class Model:
         # FIXME: Version 2: call endpoint with ping_only=True only when
         #        needed, and rely on presence events to update
         while True:
-            response = self._notify_server_of_presence()
+            try:
+                response = self._notify_server_of_presence()
+            except Exception:
+                # A dead socket (eg. after system sleep) raises here; don't
+                # let it kill this thread - skip the cycle and ping again.
+                time.sleep(self.server_presence_ping_interval_secs)
+                continue
             if response["result"] == "success":
                 self.initial_data["presences"] = response["presences"]
                 self._update_users_data_from_initial_data()
@@ -2151,6 +2157,13 @@ class Model:
         view.home_button.update_count(self.unread_counts["all_msg"])
         view.pm_button.update_count(self.unread_counts["all_pms"])
         view.mentioned_button.update_count(self.unread_counts["all_mentions"])
+        if hasattr(controller, "loop"):
+            # Stray output while the connection was down (eg. a traceback
+            # from a dying thread) may have overwritten the terminal, and
+            # urwid never repaints cells it believes are unchanged; drop its
+            # record of the screen contents so the next draw repaints every
+            # cell, as if REDRAW (ctrl l) were pressed.
+            controller.loop.screen.clear()
         controller.update_screen()
 
     @asynch
@@ -2173,9 +2186,20 @@ class Model:
                         break
                     time.sleep(reregister_timeout)
 
-            response = self.client.get_events(
-                queue_id=queue_id, last_event_id=last_event_id
-            )
+            try:
+                response = self.client.get_events(
+                    queue_id=queue_id, last_event_id=last_event_id
+                )
+            except Exception:
+                # A dead socket surfaces here, eg. after system sleep an
+                # SSLError is raised as zulip.UnrecoverableNetworkError with
+                # no retry; letting it escape would kill this daemon thread
+                # (printing a traceback over the screen) and freeze the UI
+                # until restart. Retry instead - once the server is reachable
+                # it responds, reporting BAD_EVENT_QUEUE_ID if the queue
+                # expired meanwhile, which triggers re-registration above.
+                time.sleep(1)
+                continue
 
             if "error" in response["result"]:
                 if response.get("code") == "BAD_EVENT_QUEUE_ID":

@@ -5024,3 +5024,41 @@ class TestModel:
         resync.assert_called_once_with()
         assert self.client.get_events.called
         assert sleep.call_count == len(registers) - 1
+
+    def test_poll_for_events__get_events_raises(self, mocker, model, raising_event):
+        # A network error from get_events (eg. dead socket after system
+        # sleep) should not kill the polling loop; it retries the same queue.
+        mocker.patch(MODEL + "._register_desired_events")
+        sleep = mocker.patch(MODULE + ".time.sleep")
+
+        self.client.get_events.side_effect = [
+            ZulipError("SSL Error"),
+            {
+                "events": [raising_event],
+                "result": "success",
+            },
+        ]
+
+        with pytest.raises(self.LoopEnder):
+            model.poll_for_events()
+
+        assert not model._register_desired_events.called
+        assert self.client.get_events.call_count == 2
+        sleep.assert_called_once_with(1)
+
+    def test__start_presence_updates__notify_raises(self, mocker, model):
+        # A network error while pinging presence (eg. dead socket after
+        # system sleep) should not kill the presence thread.
+        mocker.stop(Model._start_presence_updates)  # unpatch autouse mock
+        notify = mocker.patch(
+            MODEL + "._notify_server_of_presence", side_effect=ZulipError("SSL Error")
+        )
+        sleep = mocker.patch(
+            MODULE + ".time.sleep", side_effect=[None, self.LoopEnder]
+        )
+
+        with pytest.raises(self.LoopEnder):
+            model._start_presence_updates()
+
+        assert notify.call_count == 2
+        assert sleep.call_count == 2
