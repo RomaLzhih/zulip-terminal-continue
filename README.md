@@ -1,4 +1,4 @@
-# Zulip Terminal - [Zulip](https://zulip.com)'s official terminal client
+# Zulip Terminal Continue
 
 > **This is a personal fork of [zulip/zulip-terminal](https://github.com/zulip/zulip-terminal).**
 > Upstream has had no PyPI release since 0.7.0 (2021), so this fork carries our
