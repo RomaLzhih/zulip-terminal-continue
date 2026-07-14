@@ -56,8 +56,8 @@
 > `zulip-term` start (no reinstall):
 >
 > ```sh
-> git clone git@github.com:RomaLzhih/zulip-terminal-x.git
-> cd zulip-terminal-x
+> git clone git@github.com:RomaLzhih/zulip-terminal-continue.git
+> cd zulip-terminal-continue
 > git checkout dev                      # the branch carrying these patches
 > python3 -m venv zt_venv               # optional, but recommended
 > source zt_venv/bin/activate           # (bash/zsh; re-run to reactivate later)
