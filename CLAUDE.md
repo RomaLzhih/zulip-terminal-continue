@@ -120,6 +120,6 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
 - Follow upstream commit style: `area: Imperative summary.` (e.g.
   `model: Resync unread counts after re-registering a dead event queue.`)
 - Python 3.7-compatible syntax (upstream still supports 3.7); run on 3.10.
-- Remotes: `origin` = git@github.com:RomaLzhih/zulip-terminal-x.git (our fork),
+- Remotes: `origin` = git@github.com:RomaLzhih/zulip-terminal-continue.git (our fork),
   `upstream` = https://github.com/zulip/zulip-terminal.git. `gh` is not
   installed on this machine.
