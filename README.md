@@ -33,6 +33,10 @@
 > - **Messages: real emoji glyphs.** Unicode emoji in message bodies and unicode
 >   reactions render as actual emoji glyphs; custom realm emoji keep the `:name:`
 >   text form.
+> - **Messages: open external links in your browser.** Focus a message, press
+>   <kbd>i</kbd> (Message information), and selecting any external web link now
+>   opens it in your default browser. Upstream only handled Zulip-internal links
+>   and uploaded files there; plain URLs did nothing.
 >
 > **Fixes (sleep/wake resilience & unread counts)**
 > - **Unread counts no longer freeze after sleep.** When the event queue dies

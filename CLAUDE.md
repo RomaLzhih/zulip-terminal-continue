@@ -91,6 +91,14 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   prefix rule as `match_user`, across every participant). Groups appear only
   while searching; the default panel and the presence-refresh path are
   unchanged.
+- `ui_tools/buttons.py: MessageLinkButton.handle_link` — external web links in
+  the Message Information popup (`i`) now open in the default graphical browser.
+  Previously `handle_link` only handled Zulip-internal narrow links and
+  `/user_uploads/` media; any other URL fell through and did nothing. The added
+  `else` branch closes the popup (so the footer status is visible) and calls
+  `controller.open_in_browser(self.link)` (`core.py: Controller.open_in_browser`,
+  which uses `webbrowser`). Keyboard-driven, so it works regardless of the
+  terminal's mouse-capture/URL-click behavior.
 
 ## Testing
 
