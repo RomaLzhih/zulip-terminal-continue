@@ -44,6 +44,28 @@
 >   unreads after every stream/DM was read.
 >
 > See [`CLAUDE.md`](CLAUDE.md) for the exact code locations of each patch.
+>
+> **Installing & running this fork**
+>
+> It is pure Python — there is no build/compile step. Install it *editable* so
+> you run straight from the clone, and any code edit takes effect on the next
+> `zulip-term` start (no reinstall):
+>
+> ```sh
+> git clone git@github.com:RomaLzhih/zulip-terminal-x.git
+> cd zulip-terminal-x
+> git checkout dev                      # the branch carrying these patches
+> python3 -m venv zt_venv               # optional, but recommended
+> source zt_venv/bin/activate           # (bash/zsh; re-run to reactivate later)
+> pip install -e .                      # editable install into the active env
+> zulip-term                            # first run sets up ~/zuliprc
+> ```
+>
+> On first run, `zulip-term` looks for a `zuliprc` login file in your home
+> directory and offers to create one — see
+> [Running for the first time](#running-for-the-first-time) below for details.
+> To pick up later upstream changes, `git pull` on `dev` and just restart
+> `zulip-term` (editable, so no reinstall needed).
 
 [Recent changes](https://github.com/zulip/zulip-terminal/blob/main/CHANGELOG.md) | [Configuration](#Configuration) | [Hot Keys](https://github.com/zulip/zulip-terminal/blob/main/docs/hotkeys.md) | [FAQs](https://github.com/zulip/zulip-terminal/blob/main/docs/FAQ.md) | [Development](#contributor-guidelines) | [Tutorial](https://github.com/zulip/zulip-terminal/blob/main/docs/getting-started.md)
 
