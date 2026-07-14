@@ -264,6 +264,7 @@ class TestModel:
             "user_settings",
             "realm_emoji",
             "custom_profile_fields",
+            "recent_private_conversations",
             "zulip_version",
         ]
         model.client.register.assert_called_once_with(
@@ -4858,6 +4859,44 @@ class TestModel:
 
         with pytest.raises(RuntimeError, match="Invalid user ID."):
             model.user_name_from_id(user_id)
+
+    def _setup_group_pm_users(self, model):
+        model.user_id = 1001
+        model.user_id_email_dict = {
+            1001: "FOOBOO@gmail.com",
+            11: "person1@example.com",
+            12: "person2@example.com",
+        }
+        model.user_dict = {
+            "FOOBOO@gmail.com": {"full_name": "Human Myself"},
+            "person1@example.com": {"full_name": "Human 1"},
+            "person2@example.com": {"full_name": "Human 2"},
+        }
+
+    def test_group_pm_conversations(self, model):
+        # Fixture recent_private_conversations holds a self-DM, a 1:1 and one
+        # group DM (users 11 & 12); only the group DM should be returned.
+        self._setup_group_pm_users(model)
+        model.unread_counts = {"unread_huddles": {frozenset({1001, 11, 12}): 4}}
+
+        conversations = model.group_pm_conversations()
+
+        assert conversations == [
+            {
+                "user_ids": [11, 12],
+                "emails": ["person1@example.com", "person2@example.com"],
+                "full_names": ["Human 1", "Human 2"],
+                "unread_count": 4,
+            }
+        ]
+
+    def test_group_pm_conversations__skips_unresolvable_user(self, model):
+        # A participant who is no longer resolvable drops the whole thread.
+        self._setup_group_pm_users(model)
+        del model.user_id_email_dict[12]
+        model.unread_counts = {"unread_huddles": {}}
+
+        assert model.group_pm_conversations() == []
 
     def test_generate_all_emoji_data(
         self,

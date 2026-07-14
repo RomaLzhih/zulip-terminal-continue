@@ -998,6 +998,8 @@ class TestRightColumnView:
                 2: 1,
             }
         }
+        # No group DMs by default; overridden where the behavior is tested.
+        self.view.model.group_pm_conversations = mocker.Mock(return_value=[])
 
     @pytest.fixture
     def right_col_view(self, mocker):
@@ -1043,7 +1045,8 @@ class TestRightColumnView:
 
         right_col_view.update_user_list("SEARCH_BOX", search_string)
         if assert_list:
-            right_col_view.users_view.assert_called_with(assert_list)
+            # Second arg is the matching group-DM list (none in these mocks).
+            right_col_view.users_view.assert_called_with(assert_list, [])
         set_body.assert_called_once_with(right_col_view.body)
 
     def test_update_user_presence(self, right_col_view, mocker, user_list):
@@ -1051,8 +1054,29 @@ class TestRightColumnView:
 
         right_col_view.update_user_list(user_list=user_list)
 
-        right_col_view.users_view.assert_called_with(user_list)
+        right_col_view.users_view.assert_called_with(user_list, [])
         set_body.assert_called_once_with(right_col_view.body)
+
+    def test_update_user_list_with_matching_group_pms(
+        self, right_col_view, mocker
+    ):
+        right_col_view.view.controller.is_in_editor_mode = lambda: True
+        self.view.users = []
+        group_pm = {
+            "user_ids": [11, 12],
+            "emails": ["person1@example.com", "person2@example.com"],
+            "full_names": ["Human 1", "Human 2"],
+            "unread_count": 0,
+        }
+        self.view.model.group_pm_conversations = mocker.Mock(return_value=[group_pm])
+        mocker.patch(VIEWS + ".match_user", return_value=False)
+        mocker.patch(VIEWS + ".match_group_pm", return_value=True)
+        mocker.patch(VIEWS + ".urwid.Frame.set_body")
+
+        right_col_view.update_user_list("SEARCH_BOX", "Human")
+
+        # No individual user matched, but the group DM containing them does.
+        right_col_view.users_view.assert_called_with([], [group_pm])
 
     @pytest.mark.parametrize(
         "users, users_btn_len, editor_mode, status",

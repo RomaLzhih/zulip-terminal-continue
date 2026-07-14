@@ -560,6 +560,24 @@ def match_user(user: Any, text: str) -> bool:
     return any(keyword.startswith(text.lower()) for keyword in keywords)
 
 
+def match_group_pm(conversation: Dict[str, Any], text: str) -> bool:
+    """
+    Matches a group DM conversation if `text` matches any participant's
+    full name, a name part, or email (same rule as `match_user`).
+    """
+    text = text.lower()
+    for full_name, email in zip(
+        conversation["full_names"], conversation["emails"]
+    ):
+        full_name = full_name.lower()
+        keywords = full_name.split()
+        keywords.append(full_name)
+        keywords.append(email.lower())
+        if any(keyword.startswith(text) for keyword in keywords):
+            return True
+    return False
+
+
 def match_user_name_and_email(user: Any, text: str) -> bool:
     """
     Matches if the user's full name, last name, email or a combination

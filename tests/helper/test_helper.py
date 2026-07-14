@@ -16,6 +16,7 @@ from zulipterminal.helper import (
     get_unused_fence,
     hash_util_decode,
     index_messages,
+    match_group_pm,
     notify_if_message_sent_outside_narrow,
     open_media,
     powerset,
@@ -280,6 +281,25 @@ def test_sort_unread_topics(
 ) -> None:
     stream_list = [stream["id"] for stream in streams]
     assert sort_unread_topics(unread_topics, stream_list) == expected_value
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("yih", True),  # start of a first name
+        ("yan", True),  # start of another participant's name
+        ("Yihan Zhou", True),  # exact full name
+        ("yan@", True),  # start of an email
+        ("bo", False),  # matches nobody in the conversation
+        ("han", False),  # substring, not a prefix
+    ],
+)
+def test_match_group_pm(text: str, expected: bool) -> None:
+    conversation = {
+        "full_names": ["Yihan Zhou", "Yan Li"],
+        "emails": ["yihan@example.com", "yan@example.com"],
+    }
+    assert match_group_pm(conversation, text) == expected
 
 
 @pytest.mark.parametrize(

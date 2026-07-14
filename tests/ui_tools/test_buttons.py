@@ -11,6 +11,7 @@ from zulipterminal.config.symbols import CHECK_MARK, MUTE_MARKER
 from zulipterminal.ui_tools.buttons import (
     DecodedStream,
     EmojiButton,
+    GroupPMButton,
     MessageLinkButton,
     ParsedNarrowLink,
     PMButton,
@@ -306,6 +307,52 @@ class TestUserButton:
         user_button.keypress(size, key)
 
         pop_up.assert_called_once_with(user_button.user_id)
+
+
+class TestGroupPMButton:
+    @pytest.fixture
+    def conversation(self) -> Dict[str, Any]:
+        return {
+            "user_ids": [11, 12],
+            "emails": ["person1@example.com", "person2@example.com"],
+            "full_names": ["Human 1", "Human 2"],
+        }
+
+    def test_init(
+        self, mocker: MockerFixture, conversation: Dict[str, Any]
+    ) -> None:
+        controller = mocker.Mock()
+        group_button = GroupPMButton(
+            conversation=conversation,
+            controller=controller,
+            view=mocker.Mock(),
+            count=3,
+        )
+
+        assert group_button.user_ids == [11, 12]
+        assert group_button.emails == conversation["emails"]
+        assert group_button.label_text == "Human 1, Human 2"
+
+    def test_narrow_with_compose_on_activate(
+        self, mocker: MockerFixture, conversation: Dict[str, Any]
+    ) -> None:
+        controller = mocker.Mock()
+        view = mocker.Mock()
+        group_button = GroupPMButton(
+            conversation=conversation,
+            controller=controller,
+            view=view,
+            count=0,
+        )
+
+        group_button._narrow_with_compose()
+
+        controller.narrow_to_user.assert_called_once_with(
+            recipient_emails=conversation["emails"]
+        )
+        view.write_box.private_box_view.assert_called_once_with(
+            recipient_user_ids=[11, 12]
+        )
 
 
 class TestEmojiButton:

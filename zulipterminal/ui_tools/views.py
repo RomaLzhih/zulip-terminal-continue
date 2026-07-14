@@ -39,6 +39,7 @@ from zulipterminal.helper import (
     TidiedUserInfo,
     asynch,
     match_emoji,
+    match_group_pm,
     match_stream,
     match_user,
 )
@@ -47,6 +48,7 @@ from zulipterminal.server_url import near_message_url
 from zulipterminal.ui_tools.boxes import PanelSearchBox
 from zulipterminal.ui_tools.buttons import (
     EmojiButton,
+    GroupPMButton,
     HomeButton,
     MentionedButton,
     MessageLinkButton,
@@ -700,16 +702,24 @@ class RightColumnView(urwid.Frame):
                 self.view.users = user_list
 
             users = self.view.users.copy()
+            group_pms_display: List[Any] = []
             if new_text:
                 users_display = [user for user in users if match_user(user, new_text)]
+                # Also surface group DMs where a participant matches, so that
+                # searching a name finds both the 1:1 and any group threads.
+                group_pms_display = [
+                    conversation
+                    for conversation in self.view.model.group_pm_conversations()
+                    if match_group_pm(conversation, new_text)
+                ]
             else:
                 users_display = users
 
-            self.empty_search = len(users_display) == 0
+            self.empty_search = len(users_display) + len(group_pms_display) == 0
 
             # FIXME Update log directly?
             if not self.empty_search:
-                self.body = self.users_view(users_display)
+                self.body = self.users_view(users_display, group_pms_display)
             else:
                 self.body = UsersView(
                     self.view.controller, [self.user_search.search_error]
@@ -717,7 +727,7 @@ class RightColumnView(urwid.Frame):
             self.set_body(self.body)
             self.view.controller.update_screen()
 
-    def users_view(self, users: Any = None) -> Any:
+    def users_view(self, users: Any = None, group_pms: Any = None) -> Any:
         reset_default_view_users = False
         if users is None:
             users = self.view.users.copy()
@@ -742,6 +752,16 @@ class RightColumnView(urwid.Frame):
                     color=f"user_{status}",
                     count=unread_count,
                     is_current_user=is_current_user,
+                )
+            )
+        # Group DMs (search only) follow the matching individual users.
+        for conversation in group_pms or []:
+            users_btn_list.append(
+                GroupPMButton(
+                    conversation=conversation,
+                    controller=self.view.controller,
+                    view=self.view,
+                    count=conversation["unread_count"],
                 )
             )
         user_w = UsersView(self.view.controller, users_btn_list)

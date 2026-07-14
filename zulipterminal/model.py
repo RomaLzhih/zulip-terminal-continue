@@ -141,6 +141,9 @@ class Model:
             "user_settings",
             "realm_emoji",
             "custom_profile_fields",
+            # Recent DM conversations, used to list/filter group DMs in the
+            # users panel (1:1 DMs are already covered by the user list).
+            "recent_private_conversations",
             # zulip_version and zulip_feature_level are always returned in
             # POST /register from Feature level 3.
             "zulip_version",
@@ -1343,6 +1346,55 @@ class Model:
             raise RuntimeError("Invalid user ID.")
 
         return self.user_dict[user_email]["full_name"]
+
+    def group_pm_conversations(self) -> List[Dict[str, Any]]:
+        """
+        Recent *group* DM conversations (two or more recipients besides
+        oneself), most-recent first, for listing/filtering in the users
+        panel. 1:1 DMs are omitted since they are already listed as users.
+
+        Each entry holds the other participants' `user_ids`, `emails` and
+        `full_names` (sorted by name) plus the conversation `unread_count`.
+        """
+        conversations = self.initial_data.get("recent_private_conversations", [])
+        result: List[Dict[str, Any]] = []
+        for conversation in sorted(
+            conversations, key=lambda c: c["max_message_id"], reverse=True
+        ):
+            other_user_ids = [
+                user_id
+                for user_id in conversation["user_ids"]
+                if user_id != self.user_id
+            ]
+            # Only group DMs; 1:1 DMs already appear in the user list.
+            if len(other_user_ids) < 2:
+                continue
+            try:
+                recipients = [
+                    {
+                        "user_id": user_id,
+                        "full_name": self.user_name_from_id(user_id),
+                        "email": self.user_id_email_dict[user_id],
+                    }
+                    for user_id in other_user_ids
+                ]
+            except (RuntimeError, KeyError):
+                # A participant is no longer resolvable (e.g. deactivated).
+                continue
+            recipients.sort(key=lambda r: r["full_name"].casefold())
+            # unread_huddles is keyed by all participants, including oneself.
+            all_user_ids = frozenset(other_user_ids + [self.user_id])
+            result.append(
+                {
+                    "user_ids": [r["user_id"] for r in recipients],
+                    "emails": [r["email"] for r in recipients],
+                    "full_names": [r["full_name"] for r in recipients],
+                    "unread_count": self.unread_counts["unread_huddles"].get(
+                        all_user_ids, 0
+                    ),
+                }
+            )
+        return result
 
     def _subscribe_to_streams(self, subscriptions: List[Subscription]) -> None:
         def make_reduced_stream_data(stream: Subscription) -> StreamData:

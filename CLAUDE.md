@@ -76,6 +76,21 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   `_update_message_body_footer`). Only `msg_write_box` is a `VimEditBox`; the
   To/topic/stream header boxes stay plain `ReadlineEdit`. Documented for users
   in the Help menu ("Compose: Vim mode" category in `HelpView.__init__`).
+- `model.py: Model.group_pm_conversations` + `ui_tools/views.py:
+  RightColumnView.update_user_list` / `users_view` — the users panel search
+  (`w`) also surfaces **group DM** conversations. Typing a name lists the
+  matching individual users (each opens the 1:1 DM) followed by any group DMs
+  that include a matching participant, so one search finds both the 1:1 and
+  the group threads with someone. Group DMs come from the server's
+  `recent_private_conversations` (now requested in `initial_data_to_fetch`;
+  `.get(..., [])` tolerates older servers), keyed into `unread_huddles` (which
+  includes oneself) for the unread count; 1:1 conversations are skipped since
+  they already appear as users. Each group is a `buttons.py: GroupPMButton`
+  (mirrors `UserButton._narrow_with_compose`, narrowing via `narrow_to_user`
+  with all recipient emails). Matching uses `helper.py: match_group_pm` (same
+  prefix rule as `match_user`, across every participant). Groups appear only
+  while searching; the default panel and the presence-refresh path are
+  unchanged.
 
 ## Testing
 

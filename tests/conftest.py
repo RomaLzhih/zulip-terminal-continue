@@ -1050,6 +1050,11 @@ def initial_data(
         "zulip_feature_level": MINIMUM_SUPPORTED_SERVER_VERSION[1],
         "starred_messages": [1117554, 1117558, 1117574],
         "custom_profile_fields": custom_profile_fields_fixture,
+        "recent_private_conversations": [
+            {"max_message_id": 537288, "user_ids": []},  # self-DM
+            {"max_message_id": 537287, "user_ids": [11]},  # 1:1 DM
+            {"max_message_id": 537286, "user_ids": [11, 12]},  # group DM
+        ],
     }
 
 

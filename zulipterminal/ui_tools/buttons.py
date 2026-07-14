@@ -327,6 +327,41 @@ class UserButton(TopButton):
         return super().keypress(size, key)
 
 
+class GroupPMButton(TopButton):
+    """
+    A recent group direct-message conversation (three or more people,
+    including oneself), shown in the users panel while searching.
+    """
+
+    def __init__(
+        self,
+        *,
+        conversation: Dict[str, Any],
+        controller: Any,
+        view: Any,
+        count: int,
+    ) -> None:
+        self.user_ids: List[int] = conversation["user_ids"]
+        self.emails: List[str] = conversation["emails"]
+
+        self.controller = controller
+        self._view = view  # Used in _narrow_with_compose
+
+        super().__init__(
+            controller=controller,
+            prefix_markup=(None, DIRECT_MESSAGE_MARKER),
+            label_markup=(None, ", ".join(conversation["full_names"])),
+            show_function=self._narrow_with_compose,
+            count=count,
+        )
+
+    def _narrow_with_compose(self) -> None:
+        # Switches directly to composing with the group, matching UserButton.
+        self.controller.narrow_to_user(recipient_emails=self.emails)
+        self._view.body.focus.original_widget.set_focus("footer")
+        self._view.write_box.private_box_view(recipient_user_ids=self.user_ids)
+
+
 class TopicButton(TopButton):
     def __init__(
         self,
