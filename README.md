@@ -1,5 +1,50 @@
 # Zulip Terminal - [Zulip](https://zulip.com)'s official terminal client
 
+> **This is a personal fork of [zulip/zulip-terminal](https://github.com/zulip/zulip-terminal).**
+> Upstream has had no PyPI release since 0.7.0 (2021), so this fork carries our
+> own extra features and fixes on the `dev` branch. Everything below this box is
+> the upstream README, unchanged. What's different in this fork:
+>
+> **Features added**
+> - **Direct messages: find group DMs by person.** In the people search
+>   (<kbd>w</kbd>), typing a name lists the matching people first, then any
+>   **group DM** conversations that include a matching participant — so one
+>   search finds both the 1:1 and the group threads with someone. Selecting a
+>   group narrows to it and opens compose with all recipients.
+> - **Compose: Vim-style modal editing.** The message body is a modal editor
+>   (starts in insert mode; <kbd>esc</kbd> → normal mode; a second <kbd>esc</kbd>
+>   exits compose). Normal mode supports a basic subset: `h j k l w b 0 $ gg G`,
+>   `i a I A o O`, `x D dd dw C u p`, and the `c` change operator. Footer shows a
+>   `NORMAL` indicator.
+> - **Compose: live autocomplete preview.** As you type a `@`/`#`/`:` token, the
+>   matches appear in the footer automatically — no need to press
+>   autocomplete (<kbd>ctrl</kbd>+<kbd>f</kbd>), which still cycles/inserts.
+> - **Compose: `@attach:<path>` file uploads.** An `@attach:<path>` token in the
+>   compose box (path runs to end of line, `~` expanded) uploads the file on send
+>   and turns into a markdown link; a failed upload aborts the send with a footer
+>   error.
+> - **Compose: channel-scoped mentions.** When composing to a stream,
+>   `@`-mention suggestions are limited to that channel's subscribers (mentioning
+>   non-members would not notify them). Private compose is unaffected.
+> - **Messages: real emoji glyphs.** Unicode emoji in message bodies and unicode
+>   reactions render as actual emoji glyphs; custom realm emoji keep the `:name:`
+>   text form.
+>
+> **Fixes (sleep/wake resilience & unread counts)**
+> - **Unread counts no longer freeze after sleep.** When the event queue dies
+>   (e.g. after the laptop sleeps) it is re-registered with fresh data and all
+>   unread-count widgets repaint, instead of staying stale until restart.
+> - **Polling survives network errors.** Network errors in the event-poll and
+>   presence threads are caught and retried instead of killing the thread,
+>   corrupting the screen, and stopping all updates until restart. The screen is
+>   also cleared on reconnect to wipe any stray output.
+> - **No phantom "All messages" unreads.** The aggregate `all_msg` / `all_pms`
+>   counts are recomputed from the per-conversation counts on every change,
+>   instead of drifting via incremental `+=`/`-=`. Fixes "All messages" showing
+>   unreads after every stream/DM was read.
+>
+> See [`CLAUDE.md`](CLAUDE.md) for the exact code locations of each patch.
+
 [Recent changes](https://github.com/zulip/zulip-terminal/blob/main/CHANGELOG.md) | [Configuration](#Configuration) | [Hot Keys](https://github.com/zulip/zulip-terminal/blob/main/docs/hotkeys.md) | [FAQs](https://github.com/zulip/zulip-terminal/blob/main/docs/FAQ.md) | [Development](#contributor-guidelines) | [Tutorial](https://github.com/zulip/zulip-terminal/blob/main/docs/getting-started.md)
 
 [![Chat with us!](https://img.shields.io/badge/Zulip-chat_with_us!-brightgreen.svg)](https://github.com/zulip/zulip-terminal/blob/main/README.md#chat-with-fellow-users--developers)
