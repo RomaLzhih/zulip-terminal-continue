@@ -105,15 +105,22 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   only PNG is supported because the protocol's direct transmission (`f=100`) is
   PNG-only. `kitty_graphics_geometry` fits the image to the terminal preserving
   aspect (cell pixel size via a TIOCGWINSZ ioctl, else assume a 1:2 cell).
-  Terminal support is decided by an actual capability **query**
-  (`query_terminal_kitty_graphics`, action `a=q`), not env sniffing, since inside
-  tmux the env masks the real terminal; the query runs once (cached in
-  `_kitty_graphics_supported`) on the main thread during the first takeover
-  (needs raw-TTY reads while urwid is stopped). Inside tmux (`$TMUX`) the query
-  and the display/delete sequences are wrapped in `tmux_passthrough` (DCS with
-  doubled ESCs), and the pane's `allow-passthrough` is best-effort enabled first
-  (`tmux set -p allow-passthrough on`); if passthrough is unavailable no reply
-  arrives → treated as unsupported → external app. `process_media` is `@asynch`
+  Terminal support (`detect_kitty_graphics_support`, decided once and cached in
+  `_kitty_graphics_supported` on the main thread during the first takeover) is
+  primarily by **terminal identity** — `terminal_likely_supports_graphics`
+  matches kitty/ghostty/wezterm from `$TERM`/`$TERM_PROGRAM`, and **inside tmux**
+  from the *outer* terminal reported by `tmux display-message -p
+  '#{client_termname}'` (`_tmux_client_termname`), since `$TERM` is `tmux-*`
+  there. Only if that is inconclusive does it fall back to an interactive
+  capability query (`query_terminal_kitty_graphics`, action `a=q`, raw-TTY read);
+  that query is unreliable inside tmux because tmux often does not forward the
+  reply back, which is exactly why identity detection is tried first. Inside tmux
+  (`$TMUX`) the display/delete (and query) sequences are wrapped in
+  `tmux_passthrough` (DCS with doubled ESCs), and the pane's `allow-passthrough`
+  is best-effort enabled (`enable_tmux_passthrough`, `tmux set -p
+  allow-passthrough on`) both before the query and before each render (since
+  identity detection skips the query that would otherwise enable it).
+  `process_media` is `@asynch`
   (worker thread), so the takeover is marshaled onto the main urwid thread via a
   dedicated `watch_pipe` (`_image_render_pipe`) + an `Event`
   (`_image_render_done`) that blocks the worker (which then returns

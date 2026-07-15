@@ -29,10 +29,11 @@ from zulipterminal.config.ui_sizes import (
 )
 from zulipterminal.helper import (
     asynch,
+    detect_kitty_graphics_support,
+    enable_tmux_passthrough,
     kitty_graphics_delete,
     kitty_graphics_geometry,
     kitty_graphics_sequence,
-    query_terminal_kitty_graphics,
     read_png_dimensions,
     suppress_output,
 )
@@ -507,8 +508,12 @@ class Controller:
         try:
             self.loop.screen.stop()
             if self._kitty_graphics_supported is None:
-                self._kitty_graphics_supported = query_terminal_kitty_graphics()
+                self._kitty_graphics_supported = detect_kitty_graphics_support()
             if self._kitty_graphics_supported:
+                if os.environ.get("TMUX"):
+                    # Ensure passthrough is on even if support was detected
+                    # without the query (which enables it as a side effect).
+                    enable_tmux_passthrough()
                 out = sys.stdout
                 out.write("\x1b[2J\x1b[H")  # Clear the terminal, cursor home.
                 out.write(self._image_render_sequence)

@@ -858,15 +858,7 @@ def query_terminal_kitty_graphics() -> bool:
         return False
 
     if os.environ.get("TMUX"):
-        try:
-            subprocess.run(
-                ["tmux", "set", "-p", "allow-passthrough", "on"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=1,
-            )
-        except (OSError, subprocess.SubprocessError):
-            pass
+        enable_tmux_passthrough()
 
     query = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
     if os.environ.get("TMUX"):
@@ -896,6 +888,74 @@ def query_terminal_kitty_graphics() -> bool:
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
     return supported
+
+
+def enable_tmux_passthrough() -> None:
+    """
+    Best-effort enables the current tmux pane's ``allow-passthrough`` option, so
+    graphics escapes wrapped in tmux passthrough reach the outer terminal.
+    """
+    try:
+        subprocess.run(
+            ["tmux", "set", "-p", "allow-passthrough", "on"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _tmux_client_termname() -> str:
+    """
+    Returns the ``TERM`` of the terminal tmux is being displayed in (the real
+    outer terminal), via ``tmux display-message``, or "" if unavailable. Inside
+    tmux the process's own ``$TERM`` is ``tmux-*`` and hides the real terminal.
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "#{client_termname}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        return result.stdout.decode("utf-8", "replace").strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def terminal_likely_supports_graphics() -> bool:
+    """
+    True if the terminal is identifiable (from environment variables, or — inside
+    tmux — from the outer terminal reported by ``tmux display-message``) as one
+    known to support the Kitty graphics protocol. This avoids depending on the
+    interactive query, whose reply tmux may not forward back to the application.
+    """
+    if os.environ.get("TMUX"):
+        term = _tmux_client_termname().lower()
+        term_program = ""
+    else:
+        term = os.environ.get("TERM", "").lower()
+        term_program = os.environ.get("TERM_PROGRAM", "").lower()
+        if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("WEZTERM_PANE"):
+            return True
+    return (
+        "kitty" in term
+        or "ghostty" in term
+        or "wezterm" in term
+        or term_program in ("ghostty", "wezterm")
+    )
+
+
+def detect_kitty_graphics_support() -> bool:
+    """
+    Decides whether images can be rendered inline: first by identifying a known
+    graphics terminal (fast, and works through tmux), otherwise by querying the
+    terminal directly.
+    """
+    if terminal_likely_supports_graphics():
+        return True
+    return query_terminal_kitty_graphics()
 
 
 def _terminal_cell_pixel_size() -> Tuple[int, int]:

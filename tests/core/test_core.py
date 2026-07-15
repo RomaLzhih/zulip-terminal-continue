@@ -511,7 +511,7 @@ class TestController:
         controller._image_render_sequence = "<SEQ>"
         controller._image_render_rows = 4
         controller._image_rendered = False
-        mocked_query = mocker.patch(MODULE + ".query_terminal_kitty_graphics")
+        mocked_detect = mocker.patch(MODULE + ".detect_kitty_graphics_support")
         mocker.patch(MODULE + ".kitty_graphics_delete", return_value="<DEL>")
         mocked_stdout = mocker.patch(MODULE + ".sys.stdout")
         mocker.patch("builtins.input")
@@ -519,7 +519,7 @@ class TestController:
 
         assert controller._render_pending_image() is True
 
-        mocked_query.assert_not_called()  # already cached
+        mocked_detect.assert_not_called()  # already cached
         controller.loop.screen.stop.assert_called_once_with()
         written = "".join(
             call.args[0] for call in mocked_stdout.write.call_args_list
@@ -530,21 +530,21 @@ class TestController:
         controller.loop.draw_screen.assert_called_once_with()
         controller._image_render_done.set.assert_called_once_with()
 
-    def test__render_pending_image__queries_and_unsupported(
+    def test__render_pending_image__detects_and_unsupported(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
         controller._kitty_graphics_supported = None
         controller._image_render_sequence = "<SEQ>"
         controller._image_rendered = False
-        mocked_query = mocker.patch(
-            MODULE + ".query_terminal_kitty_graphics", return_value=False
+        mocked_detect = mocker.patch(
+            MODULE + ".detect_kitty_graphics_support", return_value=False
         )
         mocked_stdout = mocker.patch(MODULE + ".sys.stdout")
         controller._image_render_done = mocker.Mock()
 
         assert controller._render_pending_image() is True
 
-        mocked_query.assert_called_once_with()
+        mocked_detect.assert_called_once_with()
         assert controller._kitty_graphics_supported is False  # now cached
         assert controller._image_rendered is False
         written = "".join(

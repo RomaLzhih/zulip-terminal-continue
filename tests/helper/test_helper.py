@@ -13,6 +13,7 @@ from zulipterminal.helper import (
     UnreadCounts,
     canonicalize_color,
     classify_unread_counts,
+    detect_kitty_graphics_support,
     display_error_if_present,
     download_media,
     get_unused_fence,
@@ -30,6 +31,7 @@ from zulipterminal.helper import (
     read_png_dimensions,
     set_count,
     sort_unread_topics,
+    terminal_likely_supports_graphics,
     tmux_passthrough,
 )
 
@@ -833,6 +835,68 @@ def test_query_terminal_kitty_graphics__tmux_uses_passthrough(
     # The query is written wrapped in tmux passthrough.
     written = "".join(c.args[0] for c in mocked_write.call_args_list)
     assert written.startswith("\x1bPtmux;")
+
+
+@pytest.mark.parametrize(
+    "env, client_termname, expected",
+    [
+        # Not in tmux: identified straight from the environment.
+        ({"TERM": "xterm-kitty"}, None, True),
+        ({"TERM": "xterm-ghostty"}, None, True),
+        ({"TERM_PROGRAM": "WezTerm"}, None, True),
+        ({"KITTY_WINDOW_ID": "1"}, None, True),
+        ({"TERM": "xterm-256color"}, None, False),
+        # Inside tmux: identified from the outer terminal tmux reports.
+        ({"TMUX": "/tmp/t"}, "xterm-ghostty", True),
+        ({"TMUX": "/tmp/t"}, "xterm-kitty", True),
+        ({"TMUX": "/tmp/t"}, "xterm-256color", False),
+        ({"TMUX": "/tmp/t"}, "", False),
+    ],
+    ids=[
+        "env_kitty",
+        "env_ghostty",
+        "env_wezterm",
+        "env_kitty_window_id",
+        "env_plain",
+        "tmux_ghostty",
+        "tmux_kitty",
+        "tmux_plain",
+        "tmux_unknown",
+    ],
+)
+def test_terminal_likely_supports_graphics(
+    mocker: MockerFixture, env: Dict[str, str], client_termname: Any, expected: bool
+) -> None:
+    mocker.patch.dict(MODULE + ".os.environ", env, clear=True)
+    mocked_termname = mocker.patch(
+        MODULE + "._tmux_client_termname", return_value=client_termname or ""
+    )
+
+    assert terminal_likely_supports_graphics() is expected
+    # The outer-terminal lookup is only used inside tmux.
+    assert mocked_termname.called == bool(env.get("TMUX"))
+
+
+def test_detect_kitty_graphics_support__known_terminal_skips_query(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch(MODULE + ".terminal_likely_supports_graphics", return_value=True)
+    mocked_query = mocker.patch(MODULE + ".query_terminal_kitty_graphics")
+
+    assert detect_kitty_graphics_support() is True
+    mocked_query.assert_not_called()
+
+
+def test_detect_kitty_graphics_support__falls_back_to_query(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch(MODULE + ".terminal_likely_supports_graphics", return_value=False)
+    mocked_query = mocker.patch(
+        MODULE + ".query_terminal_kitty_graphics", return_value=True
+    )
+
+    assert detect_kitty_graphics_support() is True
+    mocked_query.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
