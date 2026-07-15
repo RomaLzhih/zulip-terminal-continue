@@ -648,6 +648,11 @@ class TestMessageBox:
                 [],
                 id="inline_image",
             ),
+            case(
+                '<img src="/user_uploads/x/photo.png">',
+                [("msg_link_index", "[IMAGE NOT RENDERED][1]")],
+                id="bare_img_with_src",
+            ),
             # FIXME inline ref?
             case('<div class="message_inline_ref">blah</div>', [], id="inline_ref"),
             case(
@@ -687,6 +692,43 @@ class TestMessageBox:
         markup, *_ = MessageBox.soup2markup(soup, metadata)
 
         assert markup == [""] + expected_markup
+
+    @pytest.mark.parametrize(
+        "content, expected_link, expected_text",
+        [
+            (
+                '<img src="/user_uploads/x/photo.png">',
+                SERVER_URL + "/user_uploads/x/photo.png",
+                SERVER_URL + "/user_uploads/x/photo.png",
+            ),
+            (
+                '<img src="https://example.com/pic.png" alt="a cat">',
+                "https://example.com/pic.png",
+                "a cat",
+            ),
+        ],
+        ids=["relative_upload", "absolute_with_alt"],
+    )
+    def test_soup2markup__image_registers_link(
+        self, content, expected_link, expected_text, mocker
+    ):
+        # A bare <img> registers its source as an openable link (message info
+        # popup / footlinks), so 'i' can open images shown as [IMAGE NOT RENDERED].
+        soup = BeautifulSoup(content, "lxml").find(name="body")
+        metadata = dict(
+            server_url=SERVER_URL,
+            message_links=OrderedDict(),
+            time_mentions=list(),
+            bq_len=0,
+        )
+
+        MessageBox.soup2markup(soup, metadata)
+
+        assert expected_link in metadata["message_links"]
+        text, index, show_footlink = metadata["message_links"][expected_link]
+        assert text == expected_text
+        assert index == 1
+        assert show_footlink is True
 
     @pytest.mark.parametrize(
         "message, last_message",

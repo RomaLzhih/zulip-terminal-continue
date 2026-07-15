@@ -123,6 +123,16 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   the external editor in `boxes.py`). Full-window preview, not
   inline-in-the-message-list (urwid's cell grid makes true inline placement
   impractical). Non-PNG (JPEG/…) is still out of scope → external app.
+- `ui_tools/messages.py: MessageBox.soup2markup` (`img` branch) — a bare `<img>`
+  in a message body (shown as `[IMAGE NOT RENDERED]`) now registers its `src` in
+  `message_links` (resolved to an absolute URL) and renders the placeholder
+  tagged with the link index, `[IMAGE NOT RENDERED][N]`. Previously the src was
+  dropped, so such an image had no entry in the Message Information popup (`i`)
+  and could not be opened at all. Inline image previews (inside a
+  `message_inline_image` div) are unchanged — that div is not recursed, so its
+  inner `<a>`/`<img>` never reach this branch; those images stay openable via
+  their accompanying text link. Opening any of these links then flows through
+  `process_media` → the Kitty inline renderer / external-app fallback above.
 - `ui_tools/buttons.py: MessageLinkButton.handle_link` — external web links in
   the Message Information popup (`i`) now open in the default graphical browser.
   Previously `handle_link` only handled Zulip-internal narrow links and

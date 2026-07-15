@@ -440,6 +440,30 @@ class MessageBox(urwid.Pile):
                 # CUSTOM EMOJIS AND ZULIP_EXTRA_EMOJI
                 emoji_name: str = tag_attrs.get("title", "")
                 markup.append(("msg_emoji", f":{emoji_name}:"))
+            elif tag == "img":
+                # IMAGE (not rendered inline): register the source URL as a
+                # link so it can be opened from the message information popup
+                # (press 'i') / footlinks, and show a placeholder tagged with
+                # its link index. Inline image previews live inside a
+                # 'message_inline_image' div (handled above) and never reach
+                # here; this covers bare <img> tags.
+                src = tag_attrs.get("src", "")
+                if src:
+                    image_link = src.rstrip("/")
+                    if not urlparse(image_link).scheme:
+                        image_link = urljoin(metadata["server_url"], image_link)
+                    if image_link not in metadata["message_links"]:
+                        metadata["message_links"][image_link] = (
+                            tag_attrs.get("alt") or image_link,
+                            len(metadata["message_links"]) + 1,
+                            True,
+                        )
+                    index = metadata["message_links"][image_link][1]
+                    markup.append(
+                        ("msg_link_index", f"[IMAGE NOT RENDERED][{index}]")
+                    )
+                else:
+                    markup.append(unrendered_template.format(unrendered_tags["img"]))
             elif tag in unrendered_tags:
                 # UNRENDERED SIMPLE TAGS
                 text = unrendered_tags[tag]
