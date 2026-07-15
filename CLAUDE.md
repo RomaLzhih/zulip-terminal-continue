@@ -91,49 +91,6 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   prefix rule as `match_user`, across every participant). Groups appear only
   while searching; the default panel and the presence-refresh path are
   unchanged.
-- `helper.py: read_png_dimensions` / `query_terminal_kitty_graphics` /
-  `tmux_passthrough` / `kitty_graphics_geometry` / `kitty_graphics_sequence` /
-  `kitty_graphics_delete` + `core.py: Controller.render_image_in_terminal` /
-  `_render_pending_image` — opening an uploaded **PNG** (via the message-info
-  popup `i`, `/user_uploads/` link) renders it **inline in the terminal** via the
-  **Kitty graphics protocol** (real pixels in Ghostty/Kitty/WezTerm, **including
-  inside tmux** via passthrough), instead of only launching an external app.
-  `process_media` calls `controller.render_image_in_terminal(media_path)`, which
-  returns False (→ falls back to the existing `open_media` external-app path)
-  only when the image can't be loaded or the terminal lacks graphics support.
-  The protocol's direct transmission (`f=100`) is PNG-only, so `load_image_as_png`
-  returns PNG bytes + dimensions: PNGs are used as-is (dimensions from the IHDR
-  header, `read_png_dimensions`); other formats (**WebP**/JPEG/GIF/…) are
-  converted to PNG via **Pillow** if installed, else an external converter
-  (`_external_convert_to_png`: ImageMagick `magick`/`convert`, macOS `sips`, or
-  `dwebp`). `kitty_graphics_geometry` fits the image to the terminal preserving
-  aspect (cell pixel size via a TIOCGWINSZ ioctl, else assume a 1:2 cell).
-  Terminal support (`detect_kitty_graphics_support`, decided once and cached in
-  `_kitty_graphics_supported` on the main thread during the first takeover) is
-  primarily by **terminal identity** — `terminal_likely_supports_graphics`
-  matches kitty/ghostty/wezterm from `$TERM`/`$TERM_PROGRAM`, and **inside tmux**
-  from the *outer* terminal reported by `tmux display-message -p
-  '#{client_termname}'` (`_tmux_client_termname`), since `$TERM` is `tmux-*`
-  there. Only if that is inconclusive does it fall back to an interactive
-  capability query (`query_terminal_kitty_graphics`, action `a=q`, raw-TTY read);
-  that query is unreliable inside tmux because tmux often does not forward the
-  reply back, which is exactly why identity detection is tried first. Inside tmux
-  (`$TMUX`) the display/delete (and query) sequences are wrapped in
-  `tmux_passthrough` (DCS with doubled ESCs), and the pane's `allow-passthrough`
-  is best-effort enabled (`enable_tmux_passthrough`, `tmux set -p
-  allow-passthrough on`) both before the query and before each render (since
-  identity detection skips the query that would otherwise enable it).
-  `process_media` is `@asynch`
-  (worker thread), so the takeover is marshaled onto the main urwid thread via a
-  dedicated `watch_pipe` (`_image_render_pipe`) + an `Event`
-  (`_image_render_done`) that blocks the worker (which then returns
-  `_image_rendered`); `_render_pending_image` does `screen.stop()` → query (if
-  uncached) → clear → write the Kitty sequence → wait for Enter → delete image
-  (`kitty_graphics_delete`) → `screen.start()` (same suspend/restore pattern as
-  the external editor in `boxes.py`). Full-window preview, not
-  inline-in-the-message-list (urwid's cell grid makes true inline placement
-  impractical). Non-PNG formats need Pillow or an external converter installed;
-  without one they fall back to the external app.
 - `ui_tools/messages.py: MessageBox.soup2markup` (`img` branch) — a bare `<img>`
   in a message body (shown as `[IMAGE NOT RENDERED]`) now registers its `src` in
   `message_links` (resolved to an absolute URL) and renders the placeholder
@@ -142,8 +99,11 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   and could not be opened at all. Inline image previews (inside a
   `message_inline_image` div) are unchanged — that div is not recursed, so its
   inner `<a>`/`<img>` never reach this branch; those images stay openable via
-  their accompanying text link. Opening any of these links then flows through
-  `process_media` → the Kitty inline renderer / external-app fallback above.
+  their accompanying text link. Opening any of these links flows through the
+  upstream `process_media`, which downloads the file and opens it in the OS
+  default app (`open`/`xdg-open`/`explorer.exe`). (Inline in-terminal image
+  rendering via the Kitty graphics protocol was tried and removed — it was
+  unreliable in the user's tmux setup; images open externally instead.)
 - `ui_tools/buttons.py: MessageLinkButton.handle_link` — external web links in
   the Message Information popup (`i`) now open in the default graphical browser.
   Previously `handle_link` only handled Zulip-internal narrow links and

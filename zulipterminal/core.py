@@ -10,7 +10,6 @@ import time
 import webbrowser
 from functools import partial
 from platform import platform
-from threading import Event
 from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
@@ -27,16 +26,7 @@ from zulipterminal.config.ui_sizes import (
     MAX_LINEAR_SCALING_WIDTH,
     MIN_SUPPORTED_POPUP_WIDTH,
 )
-from zulipterminal.helper import (
-    asynch,
-    detect_kitty_graphics_support,
-    enable_tmux_passthrough,
-    kitty_graphics_delete,
-    kitty_graphics_geometry,
-    kitty_graphics_sequence,
-    load_image_as_png,
-    suppress_output,
-)
+from zulipterminal.helper import asynch, suppress_output
 from zulipterminal.model import Model
 from zulipterminal.platform_code import PLATFORM
 from zulipterminal.ui import Screen, View
@@ -125,16 +115,6 @@ class Controller:
         self._exception_info: Optional[ExceptionInfo] = None
         self._critical_exception = False
         self._exception_pipe = self.loop.watch_pipe(self._raise_exception)
-
-        # data and urwid pipe for rendering images on the main thread, since
-        # the download runs in a worker thread but the screen takeover (and the
-        # one-time graphics-support query) must happen on the main (urwid) thread
-        self._image_render_sequence = ""
-        self._image_render_rows = 0
-        self._image_rendered = False
-        self._kitty_graphics_supported: Optional[bool] = None
-        self._image_render_done = Event()
-        self._image_render_pipe = self.loop.watch_pipe(self._render_pending_image)
 
         # Register new ^C handler
         signal.signal(
@@ -463,78 +443,6 @@ class Controller:
         except webbrowser.Error as e:
             # Set a footer text if no runnable browser is located
             self.report_error([f"ERROR: {e}"])
-
-    def render_image_in_terminal(self, media_path: str) -> bool:
-        """
-        Renders an image inline via the Kitty graphics protocol (real pixels in
-        Ghostty, Kitty and WezTerm, including inside tmux with passthrough).
-        PNGs are sent directly; other formats (WebP/JPEG/GIF/...) are converted
-        first (via Pillow or an external converter). Returns True if the image
-        was rendered, False if it cannot be loaded or the terminal lacks graphics
-        support — so the caller can fall back to opening it in an external app.
-
-        Safe to call from a worker thread (e.g. the media-download thread): the
-        actual screen takeover — and the one-time query of whether the terminal
-        supports the protocol — is marshaled onto the main (urwid) thread via a
-        pipe, and this call blocks until it completes.
-        """
-        if self._kitty_graphics_supported is False:
-            return False
-        image = load_image_as_png(media_path)
-        if image is None:
-            return False
-        png_bytes, (width, height) = image
-        cols, rows = kitty_graphics_geometry(width, height)
-        self._image_render_sequence = kitty_graphics_sequence(
-            png_bytes, cols=cols, rows=rows, tmux=bool(os.environ.get("TMUX"))
-        )
-        self._image_render_rows = rows
-        self._image_rendered = False
-        self._image_render_done.clear()
-        # Wake the main loop to run _render_pending_image on the main thread.
-        os.write(self._image_render_pipe, b"1")
-        self._image_render_done.wait()
-        return self._image_rendered
-
-    def _render_pending_image(self, *args: Any, **kwargs: Any) -> Literal[True]:
-        """
-        Runs on the main thread (via the image-render pipe): suspend the urwid
-        screen, query graphics support once (cached), draw the image if
-        supported, wait for a keypress, then restore the UI.
-        """
-        try:
-            self.loop.screen.stop()
-            if self._kitty_graphics_supported is None:
-                self._kitty_graphics_supported = detect_kitty_graphics_support()
-            if self._kitty_graphics_supported:
-                if os.environ.get("TMUX"):
-                    # Ensure passthrough is on even if support was detected
-                    # without the query (which enables it as a side effect).
-                    enable_tmux_passthrough()
-                out = sys.stdout
-                out.write("\x1b[2J\x1b[H")  # Clear the terminal, cursor home.
-                out.write(self._image_render_sequence)
-                out.write(
-                    f"\x1b[{self._image_render_rows + 1};1H"
-                    "-- Press ENTER to return to Zulip Terminal --"
-                )
-                out.flush()
-                try:
-                    input()
-                except (EOFError, KeyboardInterrupt):
-                    pass
-                # Remove the image and clear before handing back to urwid.
-                out.write(
-                    kitty_graphics_delete(tmux=bool(os.environ.get("TMUX")))
-                    + "\x1b[2J\x1b[H"
-                )
-                out.flush()
-                self._image_rendered = True
-            self.loop.screen.start()
-            self.loop.draw_screen()
-        finally:
-            self._image_render_done.set()
-        return True  # Always retain pipe
 
     @asynch
     def show_typing_notification(self) -> None:
