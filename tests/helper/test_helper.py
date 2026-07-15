@@ -1,3 +1,5 @@
+import base64
+import os
 from typing import Any, Callable, Dict, Iterable, List, Set, Tuple
 
 import pytest
@@ -15,16 +17,18 @@ from zulipterminal.helper import (
     download_media,
     get_unused_fence,
     hash_util_decode,
-    in_terminal_image_command,
     index_messages,
-    is_image_path,
+    kitty_graphics_geometry,
+    kitty_graphics_sequence,
     match_group_pm,
     notify_if_message_sent_outside_narrow,
     open_media,
     powerset,
     process_media,
+    read_png_dimensions,
     set_count,
     sort_unread_topics,
+    terminal_supports_kitty_graphics,
 )
 
 
@@ -664,6 +668,7 @@ def test_process_media(
     link: str = "/url/of/media",
 ) -> None:
     controller = mocker.Mock()
+    controller.render_image_in_terminal.return_value = False
     mocked_download_media = mocker.patch(
         MODULE + ".download_media", return_value=media_path
     )
@@ -711,60 +716,144 @@ def test_process_media__image_prefers_terminal_render(
     assert controller.show_media_confirmation_popup.called == show_media_called
 
 
-@pytest.mark.parametrize(
-    "path, expected",
-    [
-        ("/tmp/zt-abc-image.png", True),
-        ("/tmp/zt-abc-photo.JPG", True),
-        ("/tmp/zt-abc-anim.gif", True),
-        ("/tmp/zt-abc-doc.pdf", False),
-        ("/tmp/zt-abc-clip.mp4", False),
-        ("/tmp/zt-abc-noext", False),
-    ],
-)
-def test_is_image_path(path: str, expected: bool) -> None:
-    assert is_image_path(path) == expected
+def _make_png(width: int, height: int) -> bytes:
+    """Builds a minimal valid PNG of the given size (no image library needed)."""
+    import zlib
 
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return (
+            len(data).to_bytes(4, "big")
+            + body
+            + (zlib.crc32(body) & 0xFFFFFFFF).to_bytes(4, "big")
+        )
 
-@pytest.mark.parametrize(
-    "env_renderer, which_available, expected_command",
-    [
-        (None, {"chafa"}, ["chafa", "/x.png"]),
-        (None, {"kitty"}, ["kitty", "+kitten", "icat", "/x.png"]),
-        (None, {"wezterm"}, ["wezterm", "imgcat", "/x.png"]),
-        (None, {"viu"}, ["viu", "/x.png"]),
-        (None, {"timg"}, ["timg", "/x.png"]),
-        (None, {"chafa", "kitty", "wezterm"}, ["chafa", "/x.png"]),
-        (None, set(), None),
-        ("myviewer --flag", {"myviewer"}, ["myviewer", "--flag", "/x.png"]),
-        ("myviewer --flag", set(), None),
-    ],
-    ids=[
-        "chafa",
-        "kitty_icat",
-        "wezterm_imgcat",
-        "viu",
-        "timg",
-        "chafa_preferred_over_others",
-        "no_renderer",
-        "env_override",
-        "env_override_not_installed",
-    ],
-)
-def test_in_terminal_image_command(
-    mocker: MockerFixture,
-    env_renderer: Any,
-    which_available: Set[str],
-    expected_command: Any,
-) -> None:
-    env = {} if env_renderer is None else {"ZULIP_IMAGE_RENDERER": env_renderer}
-    mocker.patch.dict(MODULE + ".os.environ", env, clear=True)
-    mocker.patch(
-        MODULE + ".shutil.which",
-        side_effect=lambda cmd: cmd if cmd in which_available else None,
+    raw = b"".join(b"\x00" + b"\x00\x00\x00" * width for _ in range(height))
+    ihdr = (
+        width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + b"\x08\x02\x00\x00\x00"
+    )
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
     )
 
-    assert in_terminal_image_command("/x.png") == expected_command
+
+def test_read_png_dimensions__png(tmp_path: Any) -> None:
+    path = tmp_path / "img.png"
+    path.write_bytes(_make_png(37, 19))
+
+    assert read_png_dimensions(str(path)) == (37, 19)
+
+
+def test_read_png_dimensions__not_a_png(tmp_path: Any) -> None:
+    path = tmp_path / "not.png"
+    path.write_bytes(b"this is definitely not a PNG file at all!!")
+
+    assert read_png_dimensions(str(path)) is None
+
+
+def test_read_png_dimensions__missing_file() -> None:
+    assert read_png_dimensions("/no/such/file.png") is None
+
+
+@pytest.mark.parametrize(
+    "env, expected",
+    [
+        ({"TERM": "xterm-kitty"}, True),
+        ({"KITTY_WINDOW_ID": "1"}, True),
+        ({"TERM": "xterm-ghostty"}, True),
+        ({"TERM_PROGRAM": "ghostty"}, True),
+        ({"TERM_PROGRAM": "WezTerm"}, True),
+        ({"WEZTERM_PANE": "0"}, True),
+        ({"TERM": "xterm-kitty", "TMUX": "/tmp/tmux-x"}, False),
+        ({"TERM": "xterm-ghostty", "STY": "1.pts-0"}, False),
+        ({"TERM": "xterm-256color"}, False),
+        ({}, False),
+    ],
+    ids=[
+        "kitty_term",
+        "kitty_window_id",
+        "ghostty_term",
+        "ghostty_program",
+        "wezterm_program",
+        "wezterm_pane",
+        "kitty_inside_tmux",
+        "ghostty_inside_screen",
+        "plain_xterm",
+        "empty_env",
+    ],
+)
+def test_terminal_supports_kitty_graphics(
+    mocker: MockerFixture, env: Dict[str, str], expected: bool
+) -> None:
+    mocker.patch.dict(MODULE + ".os.environ", env, clear=True)
+
+    assert terminal_supports_kitty_graphics() is expected
+
+
+@pytest.mark.parametrize(
+    "img_w, img_h, term_cols, term_rows, cell, expected",
+    [
+        # Wide image, constrained by width; cell 10x20 -> 1:2.
+        (800, 400, 80, 24, (10, 20), (80, 20)),
+        # Tall image, constrained by height (22 usable rows).
+        (400, 800, 80, 24, (10, 20), (22, 22)),
+        # Small image is not upscaled.
+        (20, 20, 80, 24, (10, 20), (2, 1)),
+        # No cell pixel info -> assume 1:2 cell aspect.
+        (80, 80, 80, 24, (0, 0), (44, 22)),
+    ],
+    ids=["wide", "tall", "small_no_upscale", "cell_fallback"],
+)
+def test_kitty_graphics_geometry(
+    mocker: MockerFixture,
+    img_w: int,
+    img_h: int,
+    term_cols: int,
+    term_rows: int,
+    cell: Tuple[int, int],
+    expected: Tuple[int, int],
+) -> None:
+    mocker.patch(
+        MODULE + ".os.get_terminal_size",
+        return_value=os.terminal_size((term_cols, term_rows)),
+    )
+    mocker.patch(MODULE + "._terminal_cell_pixel_size", return_value=cell)
+
+    assert kitty_graphics_geometry(img_w, img_h) == expected
+
+
+def test_kitty_graphics_sequence__single_chunk() -> None:
+    png = b"\x89PNG\r\n\x1a\nsmall"
+
+    sequence = kitty_graphics_sequence(png, cols=12, rows=6)
+
+    assert sequence.startswith("\x1b_Ga=T,f=100,t=d,c=12,r=6,m=0;")
+    assert sequence.endswith("\x1b\\")
+    payload = sequence[len("\x1b_Ga=T,f=100,t=d,c=12,r=6,m=0;") : -2]
+    assert base64.standard_b64decode(payload) == png
+
+
+def test_kitty_graphics_sequence__multiple_chunks() -> None:
+    # ~9000 raw bytes base64-encodes to >8192 chars, forcing three 4096 chunks.
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 9000
+
+    sequence = kitty_graphics_sequence(png, cols=4, rows=2)
+
+    # First chunk carries the control keys and m=1 (more chunks follow).
+    assert sequence.startswith("\x1b_Ga=T,f=100,t=d,c=4,r=2,m=1;")
+    assert sequence.count("\x1b_G") >= 3  # multiple escape chunks
+    assert "\x1b_Gm=1;" in sequence  # a middle continuation chunk
+    assert "\x1b_Gm=0;" in sequence  # the final chunk
+    # Reassembling every chunk's base64 payload recovers the original bytes.
+    payload = "".join(
+        esc.split(";", 1)[1] for esc in sequence.split("\x1b\\") if esc
+    )
+    assert base64.standard_b64decode(payload) == png
 
 
 def test_process_media_empty_url(

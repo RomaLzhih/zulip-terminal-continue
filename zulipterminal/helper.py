@@ -2,10 +2,11 @@
 Helper functions used in multiple places
 """
 
+import base64
 import os
-import shlex
-import shutil
+import struct
 import subprocess
+import sys
 import time
 from collections import defaultdict
 from contextlib import contextmanager
@@ -805,59 +806,105 @@ def suppress_output() -> Iterator[None]:
         os.dup2(stderr, 2)
 
 
-IMAGE_EXTENSIONS = frozenset(
-    {
-        ".apng",
-        ".avif",
-        ".bmp",
-        ".gif",
-        ".ico",
-        ".jpeg",
-        ".jpg",
-        ".png",
-        ".svg",
-        ".tif",
-        ".tiff",
-        ".webp",
-    }
-)
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# Delete all images placed via the Kitty graphics protocol.
+KITTY_GRAPHICS_DELETE = "\x1b_Ga=d,d=A\x1b\\"
 
 
-def is_image_path(path: str) -> bool:
+def read_png_dimensions(path: str) -> Optional[Tuple[int, int]]:
     """
-    Returns True if the path looks like a still-image file (by file extension)
-    that we can try to render in the terminal.
+    If ``path`` is a PNG file, returns its ``(width, height)`` in pixels; else
+    returns None. Reads only the 8-byte signature and IHDR header, so it needs
+    no image library. Non-PNG images are unsupported by the Kitty graphics
+    protocol's direct transmission, so the caller falls back to an external app.
     """
-    return os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
-
-
-def in_terminal_image_command(media_path: str) -> Optional[List[str]]:
-    """
-    Returns a command (argv list) that renders an image inside the current
-    terminal window, or None if no supported renderer is installed.
-
-    A ``$ZULIP_IMAGE_RENDERER`` command (the image path is appended) overrides
-    the autodetection; otherwise the first available of chafa, kitty's icat,
-    wezterm's imgcat, viu or timg is used. chafa is preferred: it targets the
-    Kitty/sixel/iTerm graphics protocols where available and otherwise falls
-    back to truecolor block characters, which also render inside tmux.
-    """
-    override = os.environ.get("ZULIP_IMAGE_RENDERER")
-    if override:
-        argv = shlex.split(override)
-        if argv and shutil.which(argv[0]):
-            return [*argv, media_path]
+    try:
+        with open(path, "rb") as image_file:
+            header = image_file.read(24)
+    except OSError:
         return None
-    if shutil.which("chafa"):
-        return ["chafa", media_path]
-    if shutil.which("kitty"):
-        return ["kitty", "+kitten", "icat", media_path]
-    if shutil.which("wezterm"):
-        return ["wezterm", "imgcat", media_path]
-    for viewer in ("viu", "timg"):
-        if shutil.which(viewer):
-            return [viewer, media_path]
-    return None
+    if len(header) < 24 or header[:8] != PNG_SIGNATURE or header[12:16] != b"IHDR":
+        return None
+    width, height = struct.unpack(">II", header[16:24])
+    return width, height
+
+
+def terminal_supports_kitty_graphics() -> bool:
+    """
+    Best-effort detection (from environment variables) of whether the terminal
+    supports the Kitty graphics protocol for inline images. Returns False inside
+    tmux/screen, where the real terminal is masked and graphics escapes are
+    stripped without passthrough (so the caller falls back to an external app).
+    """
+    if os.environ.get("TMUX") or os.environ.get("STY"):
+        return False
+    term = os.environ.get("TERM", "")
+    term_program = os.environ.get("TERM_PROGRAM", "")
+    if "kitty" in term or os.environ.get("KITTY_WINDOW_ID"):
+        return True
+    if "ghostty" in term or term_program == "ghostty":
+        return True
+    if term_program == "WezTerm" or os.environ.get("WEZTERM_PANE"):
+        return True
+    return False
+
+
+def _terminal_cell_pixel_size() -> Tuple[int, int]:
+    """
+    Returns the terminal cell ``(width, height)`` in pixels via a TIOCGWINSZ
+    ioctl, or ``(0, 0)`` if that information is unavailable.
+    """
+    try:
+        import fcntl
+        import termios
+
+        packed = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b"\x00" * 8)
+        rows, cols, width_px, height_px = struct.unpack("HHHH", packed)
+        if cols and rows and width_px and height_px:
+            return width_px // cols, height_px // rows
+    except Exception:
+        pass
+    return 0, 0
+
+
+def kitty_graphics_geometry(img_w: int, img_h: int) -> Tuple[int, int]:
+    """
+    Returns the ``(columns, rows)`` cell box in which to display an
+    ``img_w`` x ``img_h`` image, fitting the current terminal while preserving
+    the aspect ratio (leaving a couple of rows for the prompt).
+    """
+    try:
+        size = os.get_terminal_size()
+        max_cols, max_rows = size.columns, max(1, size.lines - 2)
+    except OSError:
+        max_cols, max_rows = 80, 22
+    cell_w, cell_h = _terminal_cell_pixel_size()
+    if cell_w <= 0 or cell_h <= 0:
+        cell_w, cell_h = 1, 2  # assume cells are about twice as tall as wide
+    if img_w <= 0 or img_h <= 0:
+        return max_cols, max_rows
+    cols_full = img_w / cell_w
+    rows_full = img_h / cell_h
+    scale = min(max_cols / cols_full, max_rows / rows_full, 1.0)
+    return max(1, round(cols_full * scale)), max(1, round(rows_full * scale))
+
+
+def kitty_graphics_sequence(png_bytes: bytes, *, cols: int, rows: int) -> str:
+    """
+    Builds the Kitty graphics-protocol escape sequence that transmits and
+    displays a PNG, scaled into a ``cols`` x ``rows`` cell box. The base64 data
+    is split into 4096-byte chunks as the protocol requires.
+    """
+    data = base64.standard_b64encode(png_bytes).decode("ascii")
+    chunk_size = 4096
+    chunks = [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)] or [""]
+    parts = []
+    for index, chunk in enumerate(chunks):
+        controls = ["m=0" if index == len(chunks) - 1 else "m=1"]
+        if index == 0:
+            controls = ["a=T", "f=100", "t=d", f"c={cols}", f"r={rows}", *controls]
+        parts.append("\x1b_G" + ",".join(controls) + ";" + chunk + "\x1b\\")
+    return "".join(parts)
 
 
 @asynch
@@ -875,13 +922,13 @@ def process_media(controller: Any, link: str) -> None:
     media_path = download_media(controller, link, show_download_status)
     media_path = normalized_file_path(media_path)
 
-    # Prefer rendering images inside the terminal (works in Ghostty, Kitty and
-    # WezTerm, and — via chafa's block-character fallback — inside tmux). Fall
-    # back to opening the file in the OS default application for non-images or
-    # when no in-terminal image renderer is installed. The controller performs
-    # the screen takeover on the main (urwid) thread, since process_media runs
-    # in a worker thread.
-    if is_image_path(media_path) and controller.render_image_in_terminal(media_path):
+    # Prefer rendering PNG images inline via the Kitty graphics protocol (real
+    # pixels in Ghostty, Kitty and WezTerm). The controller returns False for
+    # non-PNG images, unsupported terminals or inside tmux, in which case we
+    # fall back to opening the file in the OS default application below. The
+    # screen takeover happens on the main (urwid) thread, since process_media
+    # runs in a worker thread.
+    if controller.render_image_in_terminal(media_path):
         return
 
     tool = ""

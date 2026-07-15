@@ -461,28 +461,44 @@ class TestController:
 
         mocked_report_error.assert_called_once_with([f"ERROR: {error}"])
 
-    def test_render_image_in_terminal__no_renderer(
+    def test_render_image_in_terminal__not_png(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
-        mocker.patch(MODULE + ".in_terminal_image_command", return_value=None)
+        mocker.patch(MODULE + ".read_png_dimensions", return_value=None)
+        mocked_write = mocker.patch(MODULE + ".os.write")
+        controller._image_render_done = mocker.Mock()
+
+        assert controller.render_image_in_terminal("/x.jpg") is False
+        mocked_write.assert_not_called()
+        controller._image_render_done.wait.assert_not_called()
+
+    def test_render_image_in_terminal__unsupported_terminal(
+        self, mocker: MockerFixture, controller: Controller
+    ) -> None:
+        mocker.patch(MODULE + ".read_png_dimensions", return_value=(10, 20))
+        mocker.patch(
+            MODULE + ".terminal_supports_kitty_graphics", return_value=False
+        )
         mocked_write = mocker.patch(MODULE + ".os.write")
         controller._image_render_done = mocker.Mock()
 
         assert controller.render_image_in_terminal("/x.png") is False
         mocked_write.assert_not_called()
-        controller._image_render_done.wait.assert_not_called()
 
     def test_render_image_in_terminal__marshals_to_main_thread(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
-        mocker.patch(
-            MODULE + ".in_terminal_image_command", return_value=["chafa", "/x.png"]
-        )
+        mocker.patch(MODULE + ".read_png_dimensions", return_value=(10, 20))
+        mocker.patch(MODULE + ".terminal_supports_kitty_graphics", return_value=True)
+        mocker.patch(MODULE + ".kitty_graphics_geometry", return_value=(8, 4))
+        mocker.patch(MODULE + ".kitty_graphics_sequence", return_value="<SEQ>")
+        mocker.patch("builtins.open", mocker.mock_open(read_data=b"PNGDATA"))
         mocked_write = mocker.patch(MODULE + ".os.write")
         controller._image_render_done = mocker.Mock()
 
         assert controller.render_image_in_terminal("/x.png") is True
-        assert controller._image_render_command == ["chafa", "/x.png"]
+        assert controller._image_render_sequence == "<SEQ>"
+        assert controller._image_render_rows == 4
         controller._image_render_done.clear.assert_called_once_with()
         mocked_write.assert_called_once_with(controller._image_render_pipe, b"1")
         controller._image_render_done.wait.assert_called_once_with()
@@ -490,16 +506,19 @@ class TestController:
     def test__render_pending_image(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
-        controller._image_render_command = ["chafa", "/x.png"]
-        mocked_run = mocker.patch(MODULE + ".subprocess.run")
+        controller._image_render_sequence = "<SEQ>"
+        controller._image_render_rows = 4
+        mocked_stdout = mocker.patch(MODULE + ".sys.stdout")
         mocker.patch("builtins.input")
-        mocker.patch("builtins.print")
         controller._image_render_done = mocker.Mock()
 
         assert controller._render_pending_image() is True
 
         controller.loop.screen.stop.assert_called_once_with()
-        mocked_run.assert_called_once_with(["chafa", "/x.png"])
+        written = "".join(
+            call.args[0] for call in mocked_stdout.write.call_args_list
+        )
+        assert "<SEQ>" in written
         controller.loop.screen.start.assert_called_once_with()
         controller.loop.draw_screen.assert_called_once_with()
         controller._image_render_done.set.assert_called_once_with()

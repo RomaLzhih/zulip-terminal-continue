@@ -37,15 +37,14 @@
 >   <kbd>i</kbd> (Message information), and selecting any external web link now
 >   opens it in your default browser. Upstream only handled Zulip-internal links
 >   and uploaded files there; plain URLs did nothing.
-> - **Messages: view images inside the terminal.** Opening an uploaded image
->   (via <kbd>i</kbd> → the image link) now renders it *in the terminal* as a
->   full-window preview (press Enter to return), instead of only opening it in an
->   external app. It auto-detects an image renderer — `chafa` (recommended),
->   Kitty's `icat`, WezTerm's `imgcat`, `viu`, or `timg`; set `$ZULIP_IMAGE_RENDERER`
->   to force one. In Ghostty/Kitty/WezTerm you get graphics-protocol images;
->   `chafa` also degrades to truecolor block art, so it still works inside
->   **tmux**. Non-images (or no renderer installed) fall back to the OS default
->   app. Requires one of those tools on your `PATH` (e.g. `brew install chafa`).
+> - **Messages: view images inside the terminal.** Opening an uploaded **PNG**
+>   (via <kbd>i</kbd> → the image link) renders it *inline in the terminal* using
+>   the **Kitty graphics protocol** — real pixels in Ghostty, Kitty and WezTerm —
+>   as a full-window preview (press Enter to return), instead of only opening it
+>   in an external app. No external tools required. It falls back to the OS
+>   default app for non-PNG images, terminals without graphics support, or inside
+>   **tmux** (where graphics escapes are stripped unless passthrough is
+>   configured).
 >
 > **Fixes (sleep/wake resilience & unread counts)**
 > - **Unread counts no longer freeze after sleep.** When the event queue dies
