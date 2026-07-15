@@ -99,11 +99,14 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   **Kitty graphics protocol** (real pixels in Ghostty/Kitty/WezTerm, **including
   inside tmux** via passthrough), instead of only launching an external app.
   `process_media` calls `controller.render_image_in_terminal(media_path)`, which
-  returns False (→ falls back to the existing `open_media` external-app path) for
-  non-PNG images or terminals without graphics support. No external tools and no
-  Pillow: PNG width/height come from the IHDR header (`read_png_dimensions`), and
-  only PNG is supported because the protocol's direct transmission (`f=100`) is
-  PNG-only. `kitty_graphics_geometry` fits the image to the terminal preserving
+  returns False (→ falls back to the existing `open_media` external-app path)
+  only when the image can't be loaded or the terminal lacks graphics support.
+  The protocol's direct transmission (`f=100`) is PNG-only, so `load_image_as_png`
+  returns PNG bytes + dimensions: PNGs are used as-is (dimensions from the IHDR
+  header, `read_png_dimensions`); other formats (**WebP**/JPEG/GIF/…) are
+  converted to PNG via **Pillow** if installed, else an external converter
+  (`_external_convert_to_png`: ImageMagick `magick`/`convert`, macOS `sips`, or
+  `dwebp`). `kitty_graphics_geometry` fits the image to the terminal preserving
   aspect (cell pixel size via a TIOCGWINSZ ioctl, else assume a 1:2 cell).
   Terminal support (`detect_kitty_graphics_support`, decided once and cached in
   `_kitty_graphics_supported` on the main thread during the first takeover) is
@@ -129,7 +132,8 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   (`kitty_graphics_delete`) → `screen.start()` (same suspend/restore pattern as
   the external editor in `boxes.py`). Full-window preview, not
   inline-in-the-message-list (urwid's cell grid makes true inline placement
-  impractical). Non-PNG (JPEG/…) is still out of scope → external app.
+  impractical). Non-PNG formats need Pillow or an external converter installed;
+  without one they fall back to the external app.
 - `ui_tools/messages.py: MessageBox.soup2markup` (`img` branch) — a bare `<img>`
   in a message body (shown as `[IMAGE NOT RENDERED]`) now registers its `src` in
   `message_links` (resolved to an absolute URL) and renders the placeholder

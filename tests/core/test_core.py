@@ -461,10 +461,10 @@ class TestController:
 
         mocked_report_error.assert_called_once_with([f"ERROR: {error}"])
 
-    def test_render_image_in_terminal__not_png(
+    def test_render_image_in_terminal__unloadable(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
-        mocker.patch(MODULE + ".read_png_dimensions", return_value=None)
+        mocker.patch(MODULE + ".load_image_as_png", return_value=None)
         mocked_write = mocker.patch(MODULE + ".os.write")
         controller._image_render_done = mocker.Mock()
 
@@ -476,28 +476,29 @@ class TestController:
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
         controller._kitty_graphics_supported = False
-        mocked_dimensions = mocker.patch(MODULE + ".read_png_dimensions")
+        mocked_load = mocker.patch(MODULE + ".load_image_as_png")
         mocked_write = mocker.patch(MODULE + ".os.write")
 
         assert controller.render_image_in_terminal("/x.png") is False
         # Skips the takeover entirely once known unsupported.
-        mocked_dimensions.assert_not_called()
+        mocked_load.assert_not_called()
         mocked_write.assert_not_called()
 
     def test_render_image_in_terminal__marshals_to_main_thread(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
-        mocker.patch(MODULE + ".read_png_dimensions", return_value=(10, 20))
+        mocker.patch(
+            MODULE + ".load_image_as_png", return_value=(b"PNGDATA", (10, 20))
+        )
         mocker.patch(MODULE + ".kitty_graphics_geometry", return_value=(8, 4))
         mocker.patch(MODULE + ".kitty_graphics_sequence", return_value="<SEQ>")
-        mocker.patch("builtins.open", mocker.mock_open(read_data=b"PNGDATA"))
         mocked_write = mocker.patch(MODULE + ".os.write")
         # Simulate the main thread rendering successfully.
         done = mocker.Mock()
         done.wait.side_effect = lambda: setattr(controller, "_image_rendered", True)
         controller._image_render_done = done
 
-        assert controller.render_image_in_terminal("/x.png") is True
+        assert controller.render_image_in_terminal("/x.webp") is True
         assert controller._image_render_sequence == "<SEQ>"
         assert controller._image_render_rows == 4
         done.clear.assert_called_once_with()

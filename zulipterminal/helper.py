@@ -3,7 +3,9 @@ Helper functions used in multiple places
 """
 
 import base64
+import io
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -834,6 +836,93 @@ def read_png_dimensions(path: str) -> Optional[Tuple[int, int]]:
         return None
     width, height = struct.unpack(">II", header[16:24])
     return width, height
+
+
+# External image->PNG converters, tried in order (the last two args are the
+# source and destination paths, appended per-tool below).
+_PNG_CONVERTERS = [
+    ["magick"],  # ImageMagick 7
+    ["convert"],  # ImageMagick 6
+    ["sips", "-s", "format", "png"],  # macOS built-in
+    ["dwebp"],  # libwebp (WebP only)
+]
+
+
+def _external_convert_to_png(src: str, dst: str) -> bool:
+    """
+    Converts the image at ``src`` to a PNG at ``dst`` using the first available
+    external converter (ImageMagick/sips/dwebp). Returns True on success.
+    """
+    for tool in _PNG_CONVERTERS:
+        if not shutil.which(tool[0]):
+            continue
+        if tool[0] == "sips":
+            command = [*tool, src, "--out", dst]
+        elif tool[0] == "dwebp":
+            command = [*tool, src, "-o", dst]
+        else:
+            command = [*tool, src, dst]
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0 and os.path.exists(dst) and os.path.getsize(dst):
+            return True
+    return False
+
+
+def load_image_as_png(path: str) -> Optional[Tuple[bytes, Tuple[int, int]]]:
+    """
+    Returns ``(PNG bytes, (width, height))`` for an image file, so it can be sent
+    to the terminal via the Kitty graphics protocol (which only transmits PNG
+    directly). PNGs are used as-is; other formats (WebP/JPEG/GIF/...) are
+    converted with Pillow if installed, else an external converter
+    (ImageMagick/sips/dwebp). Returns None if the image cannot be loaded (so the
+    caller falls back to an external app).
+    """
+    dimensions = read_png_dimensions(path)
+    if dimensions is not None:
+        try:
+            with open(path, "rb") as image_file:
+                return image_file.read(), dimensions
+        except OSError:
+            return None
+
+    # Non-PNG: convert with Pillow if available.
+    try:
+        from PIL import Image  # noqa: I900 (optional dependency)
+    except ImportError:
+        Image = None  # type: ignore[assignment]
+    if Image is not None:
+        try:
+            with Image.open(path) as image:
+                rgba = image.convert("RGBA")
+                buffer = io.BytesIO()
+                rgba.save(buffer, format="PNG")
+                return buffer.getvalue(), (rgba.width, rgba.height)
+        except Exception:
+            pass  # Fall through to an external converter.
+
+    # Non-PNG without Pillow: convert via an external tool.
+    with NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+        png_path = tmp_file.name
+    try:
+        if _external_convert_to_png(path, png_path):
+            converted = read_png_dimensions(png_path)
+            if converted is not None:
+                with open(png_path, "rb") as png_file:
+                    return png_file.read(), converted
+        return None
+    finally:
+        try:
+            os.remove(png_path)
+        except OSError:
+            pass
 
 
 def query_terminal_kitty_graphics() -> bool:

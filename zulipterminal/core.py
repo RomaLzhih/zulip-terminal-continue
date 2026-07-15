@@ -34,7 +34,7 @@ from zulipterminal.helper import (
     kitty_graphics_delete,
     kitty_graphics_geometry,
     kitty_graphics_sequence,
-    read_png_dimensions,
+    load_image_as_png,
     suppress_output,
 )
 from zulipterminal.model import Model
@@ -466,11 +466,12 @@ class Controller:
 
     def render_image_in_terminal(self, media_path: str) -> bool:
         """
-        Renders a PNG image inline via the Kitty graphics protocol (real pixels
-        in Ghostty, Kitty and WezTerm, including inside tmux with passthrough).
-        Returns True if the image was rendered, False for non-PNG images or
-        terminals without graphics support — so the caller can fall back to
-        opening it in an external app.
+        Renders an image inline via the Kitty graphics protocol (real pixels in
+        Ghostty, Kitty and WezTerm, including inside tmux with passthrough).
+        PNGs are sent directly; other formats (WebP/JPEG/GIF/...) are converted
+        first (via Pillow or an external converter). Returns True if the image
+        was rendered, False if it cannot be loaded or the terminal lacks graphics
+        support — so the caller can fall back to opening it in an external app.
 
         Safe to call from a worker thread (e.g. the media-download thread): the
         actual screen takeover — and the one-time query of whether the terminal
@@ -479,15 +480,11 @@ class Controller:
         """
         if self._kitty_graphics_supported is False:
             return False
-        dimensions = read_png_dimensions(media_path)
-        if dimensions is None:
+        image = load_image_as_png(media_path)
+        if image is None:
             return False
-        try:
-            with open(media_path, "rb") as image_file:
-                png_bytes = image_file.read()
-        except OSError:
-            return False
-        cols, rows = kitty_graphics_geometry(*dimensions)
+        png_bytes, (width, height) = image
+        cols, rows = kitty_graphics_geometry(width, height)
         self._image_render_sequence = kitty_graphics_sequence(
             png_bytes, cols=cols, rows=rows, tmux=bool(os.environ.get("TMUX"))
         )

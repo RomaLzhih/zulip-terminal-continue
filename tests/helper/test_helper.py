@@ -6,6 +6,7 @@ import pytest
 from pytest import param as case
 from pytest_mock import MockerFixture
 
+from zulipterminal import helper
 from zulipterminal.api_types import Composition
 from zulipterminal.config.keys import primary_display_key_for_command
 from zulipterminal.helper import (
@@ -22,6 +23,7 @@ from zulipterminal.helper import (
     kitty_graphics_delete,
     kitty_graphics_geometry,
     kitty_graphics_sequence,
+    load_image_as_png,
     match_group_pm,
     notify_if_message_sent_outside_narrow,
     open_media,
@@ -762,6 +764,88 @@ def test_read_png_dimensions__not_a_png(tmp_path: Any) -> None:
 
 def test_read_png_dimensions__missing_file() -> None:
     assert read_png_dimensions("/no/such/file.png") is None
+
+
+def test_load_image_as_png__png_used_directly(tmp_path: Any) -> None:
+    png_bytes = _make_png(12, 8)
+    path = tmp_path / "img.png"
+    path.write_bytes(png_bytes)
+
+    result = load_image_as_png(str(path))
+
+    assert result == (png_bytes, (12, 8))
+
+
+def test_load_image_as_png__non_png_converted_externally(
+    mocker: MockerFixture, tmp_path: Any
+) -> None:
+    src = tmp_path / "img.webp"
+    src.write_bytes(b"RIFF....WEBP fake")
+    converted_png = _make_png(5, 6)
+
+    # No Pillow available; the external converter writes a PNG to dst.
+    mocker.patch.dict("sys.modules", {"PIL": None})
+
+    def fake_convert(source: str, dst: str) -> bool:
+        with open(dst, "wb") as png:
+            png.write(converted_png)
+        return True
+
+    mocker.patch(MODULE + "._external_convert_to_png", side_effect=fake_convert)
+
+    result = load_image_as_png(str(src))
+
+    assert result == (converted_png, (5, 6))
+
+
+def test_load_image_as_png__conversion_fails(
+    mocker: MockerFixture, tmp_path: Any
+) -> None:
+    src = tmp_path / "img.webp"
+    src.write_bytes(b"RIFF....WEBP fake")
+    mocker.patch.dict("sys.modules", {"PIL": None})
+    mocker.patch(MODULE + "._external_convert_to_png", return_value=False)
+
+    assert load_image_as_png(str(src)) is None
+
+
+@pytest.mark.parametrize(
+    "available, expected_command",
+    [
+        ({"magick"}, ["magick", "/s.webp", "/d.png"]),
+        ({"convert"}, ["convert", "/s.webp", "/d.png"]),
+        (
+            {"sips"},
+            ["sips", "-s", "format", "png", "/s.webp", "--out", "/d.png"],
+        ),
+        ({"dwebp"}, ["dwebp", "/s.webp", "-o", "/d.png"]),
+        ({"magick", "sips"}, ["magick", "/s.webp", "/d.png"]),  # order preference
+    ],
+    ids=["magick", "convert", "sips", "dwebp", "prefers_magick"],
+)
+def test__external_convert_to_png__command(
+    mocker: MockerFixture, available: Set[str], expected_command: List[str]
+) -> None:
+    mocker.patch(
+        MODULE + ".shutil.which",
+        side_effect=lambda cmd: cmd if cmd in available else None,
+    )
+    mocked_run = mocker.patch(
+        MODULE + ".subprocess.run", return_value=mocker.Mock(returncode=0)
+    )
+    mocker.patch(MODULE + ".os.path.exists", return_value=True)
+    mocker.patch(MODULE + ".os.path.getsize", return_value=10)
+
+    assert helper._external_convert_to_png("/s.webp", "/d.png") is True
+    assert mocked_run.call_args.args[0] == expected_command
+
+
+def test__external_convert_to_png__no_tool(mocker: MockerFixture) -> None:
+    mocker.patch(MODULE + ".shutil.which", return_value=None)
+    mocked_run = mocker.patch(MODULE + ".subprocess.run")
+
+    assert helper._external_convert_to_png("/s.webp", "/d.png") is False
+    mocked_run.assert_not_called()
 
 
 def test_tmux_passthrough() -> None:

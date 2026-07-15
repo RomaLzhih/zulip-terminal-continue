@@ -37,14 +37,17 @@
 >   <kbd>i</kbd> (Message information), and selecting any external web link now
 >   opens it in your default browser. Upstream only handled Zulip-internal links
 >   and uploaded files there; plain URLs did nothing.
-> - **Messages: view images inside the terminal.** Opening an uploaded **PNG**
+> - **Messages: view images inside the terminal.** Opening an uploaded image
 >   (via <kbd>i</kbd> → the image link) renders it *inline in the terminal* using
 >   the **Kitty graphics protocol** — real pixels in Ghostty, Kitty and WezTerm —
 >   as a full-window preview (press Enter to return), instead of only opening it
->   in an external app. No external tools required. Works **inside tmux** too: it
->   enables the pane's `allow-passthrough` and sends the image through tmux
->   passthrough (the terminal is probed for graphics support first). Falls back to
->   the OS default app for non-PNG images or terminals without graphics support.
+>   in an external app. PNGs need no extra tools; **WebP/JPEG/GIF** are converted
+>   first via Pillow (`pip install Pillow`) or an external converter (ImageMagick,
+>   macOS `sips`, or `dwebp`) if one is on your `PATH`. Works **inside tmux** too:
+>   it enables the pane's `allow-passthrough` and sends the image through tmux
+>   passthrough (detecting the outer terminal via `tmux display-message`). Falls
+>   back to the OS default app when the image can't be converted or the terminal
+>   lacks graphics support.
 >
 > **Fixes (sleep/wake resilience & unread counts)**
 > - **Unread counts no longer freeze after sleep.** When the event queue dies
