@@ -472,55 +472,87 @@ class TestController:
         mocked_write.assert_not_called()
         controller._image_render_done.wait.assert_not_called()
 
-    def test_render_image_in_terminal__unsupported_terminal(
+    def test_render_image_in_terminal__cached_unsupported(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
-        mocker.patch(MODULE + ".read_png_dimensions", return_value=(10, 20))
-        mocker.patch(
-            MODULE + ".terminal_supports_kitty_graphics", return_value=False
-        )
+        controller._kitty_graphics_supported = False
+        mocked_dimensions = mocker.patch(MODULE + ".read_png_dimensions")
         mocked_write = mocker.patch(MODULE + ".os.write")
-        controller._image_render_done = mocker.Mock()
 
         assert controller.render_image_in_terminal("/x.png") is False
+        # Skips the takeover entirely once known unsupported.
+        mocked_dimensions.assert_not_called()
         mocked_write.assert_not_called()
 
     def test_render_image_in_terminal__marshals_to_main_thread(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
         mocker.patch(MODULE + ".read_png_dimensions", return_value=(10, 20))
-        mocker.patch(MODULE + ".terminal_supports_kitty_graphics", return_value=True)
         mocker.patch(MODULE + ".kitty_graphics_geometry", return_value=(8, 4))
         mocker.patch(MODULE + ".kitty_graphics_sequence", return_value="<SEQ>")
         mocker.patch("builtins.open", mocker.mock_open(read_data=b"PNGDATA"))
         mocked_write = mocker.patch(MODULE + ".os.write")
-        controller._image_render_done = mocker.Mock()
+        # Simulate the main thread rendering successfully.
+        done = mocker.Mock()
+        done.wait.side_effect = lambda: setattr(controller, "_image_rendered", True)
+        controller._image_render_done = done
 
         assert controller.render_image_in_terminal("/x.png") is True
         assert controller._image_render_sequence == "<SEQ>"
         assert controller._image_render_rows == 4
-        controller._image_render_done.clear.assert_called_once_with()
+        done.clear.assert_called_once_with()
         mocked_write.assert_called_once_with(controller._image_render_pipe, b"1")
-        controller._image_render_done.wait.assert_called_once_with()
+        done.wait.assert_called_once_with()
 
-    def test__render_pending_image(
+    def test__render_pending_image__supported(
         self, mocker: MockerFixture, controller: Controller
     ) -> None:
+        controller._kitty_graphics_supported = True
         controller._image_render_sequence = "<SEQ>"
         controller._image_render_rows = 4
+        controller._image_rendered = False
+        mocked_query = mocker.patch(MODULE + ".query_terminal_kitty_graphics")
+        mocker.patch(MODULE + ".kitty_graphics_delete", return_value="<DEL>")
         mocked_stdout = mocker.patch(MODULE + ".sys.stdout")
         mocker.patch("builtins.input")
         controller._image_render_done = mocker.Mock()
 
         assert controller._render_pending_image() is True
 
+        mocked_query.assert_not_called()  # already cached
         controller.loop.screen.stop.assert_called_once_with()
         written = "".join(
             call.args[0] for call in mocked_stdout.write.call_args_list
         )
         assert "<SEQ>" in written
+        assert controller._image_rendered is True
         controller.loop.screen.start.assert_called_once_with()
         controller.loop.draw_screen.assert_called_once_with()
+        controller._image_render_done.set.assert_called_once_with()
+
+    def test__render_pending_image__queries_and_unsupported(
+        self, mocker: MockerFixture, controller: Controller
+    ) -> None:
+        controller._kitty_graphics_supported = None
+        controller._image_render_sequence = "<SEQ>"
+        controller._image_rendered = False
+        mocked_query = mocker.patch(
+            MODULE + ".query_terminal_kitty_graphics", return_value=False
+        )
+        mocked_stdout = mocker.patch(MODULE + ".sys.stdout")
+        controller._image_render_done = mocker.Mock()
+
+        assert controller._render_pending_image() is True
+
+        mocked_query.assert_called_once_with()
+        assert controller._kitty_graphics_supported is False  # now cached
+        assert controller._image_rendered is False
+        written = "".join(
+            call.args[0] for call in mocked_stdout.write.call_args_list
+        )
+        assert "<SEQ>" not in written  # nothing drawn
+        controller.loop.screen.stop.assert_called_once_with()
+        controller.loop.screen.start.assert_called_once_with()
         controller._image_render_done.set.assert_called_once_with()
 
     def test_main(self, mocker: MockerFixture, controller: Controller) -> None:

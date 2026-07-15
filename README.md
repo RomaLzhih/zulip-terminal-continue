@@ -41,10 +41,10 @@
 >   (via <kbd>i</kbd> → the image link) renders it *inline in the terminal* using
 >   the **Kitty graphics protocol** — real pixels in Ghostty, Kitty and WezTerm —
 >   as a full-window preview (press Enter to return), instead of only opening it
->   in an external app. No external tools required. It falls back to the OS
->   default app for non-PNG images, terminals without graphics support, or inside
->   **tmux** (where graphics escapes are stripped unless passthrough is
->   configured).
+>   in an external app. No external tools required. Works **inside tmux** too: it
+>   enables the pane's `allow-passthrough` and sends the image through tmux
+>   passthrough (the terminal is probed for graphics support first). Falls back to
+>   the OS default app for non-PNG images or terminals without graphics support.
 >
 > **Fixes (sleep/wake resilience & unread counts)**
 > - **Unread counts no longer freeze after sleep.** When the event queue dies

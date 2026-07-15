@@ -91,30 +91,38 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   prefix rule as `match_user`, across every participant). Groups appear only
   while searching; the default panel and the presence-refresh path are
   unchanged.
-- `helper.py: read_png_dimensions` / `terminal_supports_kitty_graphics` /
-  `kitty_graphics_geometry` / `kitty_graphics_sequence` +
-  `core.py: Controller.render_image_in_terminal` / `_render_pending_image` —
-  opening an uploaded **PNG** (via the message-info popup `i`, `/user_uploads/`
-  link) renders it **inline in the terminal** via the **Kitty graphics protocol**
-  (real pixels in Ghostty/Kitty/WezTerm), instead of only launching an external
-  app. `process_media` calls `controller.render_image_in_terminal(media_path)`,
-  which returns False (→ falls back to the existing `open_media` external-app
-  path) for non-PNG images, terminals without graphics support, or inside tmux
-  (`terminal_supports_kitty_graphics` returns False when `$TMUX`/`$STY` is set,
-  since graphics escapes are stripped without passthrough). No external tools and
-  no Pillow: PNG width/height come from the IHDR header (`read_png_dimensions`),
-  and only PNG is supported because the protocol's direct transmission (`f=100`)
-  is PNG-only. `kitty_graphics_geometry` fits the image to the terminal
-  preserving aspect (cell pixel size via a TIOCGWINSZ ioctl, else assume a 1:2
-  cell). `process_media` is `@asynch` (worker thread), so the screen takeover is
-  marshaled onto the main urwid thread via a dedicated `watch_pipe`
-  (`_image_render_pipe`) + an `Event` (`_image_render_done`) that blocks the
-  worker; `_render_pending_image` does `screen.stop()` → clear → write the Kitty
-  sequence → wait for Enter → delete image (`KITTY_GRAPHICS_DELETE`) →
-  `screen.start()` (same suspend/restore pattern as the external editor in
-  `boxes.py`). Full-window preview, not inline-in-the-message-list (urwid's cell
-  grid makes true inline placement impractical). tmux-passthrough support and
-  non-PNG (JPEG/…) are deliberately out of scope for now → external app.
+- `helper.py: read_png_dimensions` / `query_terminal_kitty_graphics` /
+  `tmux_passthrough` / `kitty_graphics_geometry` / `kitty_graphics_sequence` /
+  `kitty_graphics_delete` + `core.py: Controller.render_image_in_terminal` /
+  `_render_pending_image` — opening an uploaded **PNG** (via the message-info
+  popup `i`, `/user_uploads/` link) renders it **inline in the terminal** via the
+  **Kitty graphics protocol** (real pixels in Ghostty/Kitty/WezTerm, **including
+  inside tmux** via passthrough), instead of only launching an external app.
+  `process_media` calls `controller.render_image_in_terminal(media_path)`, which
+  returns False (→ falls back to the existing `open_media` external-app path) for
+  non-PNG images or terminals without graphics support. No external tools and no
+  Pillow: PNG width/height come from the IHDR header (`read_png_dimensions`), and
+  only PNG is supported because the protocol's direct transmission (`f=100`) is
+  PNG-only. `kitty_graphics_geometry` fits the image to the terminal preserving
+  aspect (cell pixel size via a TIOCGWINSZ ioctl, else assume a 1:2 cell).
+  Terminal support is decided by an actual capability **query**
+  (`query_terminal_kitty_graphics`, action `a=q`), not env sniffing, since inside
+  tmux the env masks the real terminal; the query runs once (cached in
+  `_kitty_graphics_supported`) on the main thread during the first takeover
+  (needs raw-TTY reads while urwid is stopped). Inside tmux (`$TMUX`) the query
+  and the display/delete sequences are wrapped in `tmux_passthrough` (DCS with
+  doubled ESCs), and the pane's `allow-passthrough` is best-effort enabled first
+  (`tmux set -p allow-passthrough on`); if passthrough is unavailable no reply
+  arrives → treated as unsupported → external app. `process_media` is `@asynch`
+  (worker thread), so the takeover is marshaled onto the main urwid thread via a
+  dedicated `watch_pipe` (`_image_render_pipe`) + an `Event`
+  (`_image_render_done`) that blocks the worker (which then returns
+  `_image_rendered`); `_render_pending_image` does `screen.stop()` → query (if
+  uncached) → clear → write the Kitty sequence → wait for Enter → delete image
+  (`kitty_graphics_delete`) → `screen.start()` (same suspend/restore pattern as
+  the external editor in `boxes.py`). Full-window preview, not
+  inline-in-the-message-list (urwid's cell grid makes true inline placement
+  impractical). Non-PNG (JPEG/…) is still out of scope → external app.
 - `ui_tools/buttons.py: MessageLinkButton.handle_link` — external web links in
   the Message Information popup (`i`) now open in the default graphical browser.
   Previously `handle_link` only handled Zulip-internal narrow links and

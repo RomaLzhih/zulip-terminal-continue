@@ -807,8 +807,15 @@ def suppress_output() -> Iterator[None]:
 
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-# Delete all images placed via the Kitty graphics protocol.
-KITTY_GRAPHICS_DELETE = "\x1b_Ga=d,d=A\x1b\\"
+
+
+def tmux_passthrough(sequence: str) -> str:
+    """
+    Wraps an escape sequence in tmux's passthrough DCS so tmux forwards it
+    verbatim to the underlying terminal (each ESC is doubled, as tmux requires).
+    Needs the pane's ``allow-passthrough`` option enabled to take effect.
+    """
+    return "\x1bPtmux;" + sequence.replace("\x1b", "\x1b\x1b") + "\x1b\\"
 
 
 def read_png_dimensions(path: str) -> Optional[Tuple[int, int]]:
@@ -829,24 +836,66 @@ def read_png_dimensions(path: str) -> Optional[Tuple[int, int]]:
     return width, height
 
 
-def terminal_supports_kitty_graphics() -> bool:
+def query_terminal_kitty_graphics() -> bool:
     """
-    Best-effort detection (from environment variables) of whether the terminal
-    supports the Kitty graphics protocol for inline images. Returns False inside
-    tmux/screen, where the real terminal is masked and graphics escapes are
-    stripped without passthrough (so the caller falls back to an external app).
+    Asks the terminal whether it supports the Kitty graphics protocol, by
+    transmitting a 1x1 query image (``a=q``) and reading the reply. Must be
+    called while the app owns the TTY directly (urwid screen stopped), and is
+    cached by the caller since it briefly reads from stdin.
+
+    Inside tmux the query is sent via passthrough (and the pane's
+    ``allow-passthrough`` is best-effort enabled first), so it only succeeds when
+    the underlying terminal supports graphics and passthrough is available;
+    otherwise no reply arrives and the caller falls back to an external app.
     """
-    if os.environ.get("TMUX") or os.environ.get("STY"):
+    try:
+        import select
+        import termios
+        import tty
+    except ImportError:
         return False
-    term = os.environ.get("TERM", "")
-    term_program = os.environ.get("TERM_PROGRAM", "")
-    if "kitty" in term or os.environ.get("KITTY_WINDOW_ID"):
-        return True
-    if "ghostty" in term or term_program == "ghostty":
-        return True
-    if term_program == "WezTerm" or os.environ.get("WEZTERM_PANE"):
-        return True
-    return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+
+    if os.environ.get("TMUX"):
+        try:
+            subprocess.run(
+                ["tmux", "set", "-p", "allow-passthrough", "on"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=1,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    query = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
+    if os.environ.get("TMUX"):
+        query = tmux_passthrough(query)
+
+    fd = sys.stdin.fileno()
+    try:
+        old_attr = termios.tcgetattr(fd)
+    except termios.error:
+        return False
+    supported = False
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write(query)
+        sys.stdout.flush()
+        response = ""
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            timeout = max(0.0, deadline - time.time())
+            readable, _, _ = select.select([fd], [], [], timeout)
+            if not readable:
+                break
+            response += os.read(fd, 1024).decode("latin-1", "replace")
+            if "_Gi=31;OK" in response:
+                supported = True
+                break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+    return supported
 
 
 def _terminal_cell_pixel_size() -> Tuple[int, int]:
@@ -889,11 +938,14 @@ def kitty_graphics_geometry(img_w: int, img_h: int) -> Tuple[int, int]:
     return max(1, round(cols_full * scale)), max(1, round(rows_full * scale))
 
 
-def kitty_graphics_sequence(png_bytes: bytes, *, cols: int, rows: int) -> str:
+def kitty_graphics_sequence(
+    png_bytes: bytes, *, cols: int, rows: int, tmux: bool = False
+) -> str:
     """
     Builds the Kitty graphics-protocol escape sequence that transmits and
     displays a PNG, scaled into a ``cols`` x ``rows`` cell box. The base64 data
-    is split into 4096-byte chunks as the protocol requires.
+    is split into 4096-byte chunks as the protocol requires; when ``tmux`` is
+    True each chunk is wrapped in tmux passthrough.
     """
     data = base64.standard_b64encode(png_bytes).decode("ascii")
     chunk_size = 4096
@@ -903,8 +955,18 @@ def kitty_graphics_sequence(png_bytes: bytes, *, cols: int, rows: int) -> str:
         controls = ["m=0" if index == len(chunks) - 1 else "m=1"]
         if index == 0:
             controls = ["a=T", "f=100", "t=d", f"c={cols}", f"r={rows}", *controls]
-        parts.append("\x1b_G" + ",".join(controls) + ";" + chunk + "\x1b\\")
+        escape = "\x1b_G" + ",".join(controls) + ";" + chunk + "\x1b\\"
+        parts.append(tmux_passthrough(escape) if tmux else escape)
     return "".join(parts)
+
+
+def kitty_graphics_delete(tmux: bool = False) -> str:
+    """
+    Returns the escape sequence that deletes all images placed via the Kitty
+    graphics protocol, wrapped in tmux passthrough when ``tmux`` is True.
+    """
+    escape = "\x1b_Ga=d,d=A\x1b\\"
+    return tmux_passthrough(escape) if tmux else escape
 
 
 @asynch

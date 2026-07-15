@@ -18,6 +18,7 @@ from zulipterminal.helper import (
     get_unused_fence,
     hash_util_decode,
     index_messages,
+    kitty_graphics_delete,
     kitty_graphics_geometry,
     kitty_graphics_sequence,
     match_group_pm,
@@ -25,10 +26,11 @@ from zulipterminal.helper import (
     open_media,
     powerset,
     process_media,
+    query_terminal_kitty_graphics,
     read_png_dimensions,
     set_count,
     sort_unread_topics,
-    terminal_supports_kitty_graphics,
+    tmux_passthrough,
 )
 
 
@@ -760,39 +762,77 @@ def test_read_png_dimensions__missing_file() -> None:
     assert read_png_dimensions("/no/such/file.png") is None
 
 
-@pytest.mark.parametrize(
-    "env, expected",
-    [
-        ({"TERM": "xterm-kitty"}, True),
-        ({"KITTY_WINDOW_ID": "1"}, True),
-        ({"TERM": "xterm-ghostty"}, True),
-        ({"TERM_PROGRAM": "ghostty"}, True),
-        ({"TERM_PROGRAM": "WezTerm"}, True),
-        ({"WEZTERM_PANE": "0"}, True),
-        ({"TERM": "xterm-kitty", "TMUX": "/tmp/tmux-x"}, False),
-        ({"TERM": "xterm-ghostty", "STY": "1.pts-0"}, False),
-        ({"TERM": "xterm-256color"}, False),
-        ({}, False),
-    ],
-    ids=[
-        "kitty_term",
-        "kitty_window_id",
-        "ghostty_term",
-        "ghostty_program",
-        "wezterm_program",
-        "wezterm_pane",
-        "kitty_inside_tmux",
-        "ghostty_inside_screen",
-        "plain_xterm",
-        "empty_env",
-    ],
-)
-def test_terminal_supports_kitty_graphics(
-    mocker: MockerFixture, env: Dict[str, str], expected: bool
-) -> None:
-    mocker.patch.dict(MODULE + ".os.environ", env, clear=True)
+def test_tmux_passthrough() -> None:
+    wrapped = tmux_passthrough("\x1b_Gtest\x1b\\")
 
-    assert terminal_supports_kitty_graphics() is expected
+    # DCS prefix + doubled ESCs + terminator.
+    assert wrapped.startswith("\x1bPtmux;")
+    assert wrapped.endswith("\x1b\\")
+    assert "\x1b\x1b_Gtest\x1b\x1b\\" in wrapped
+
+
+def _mock_tty(mocker: MockerFixture, *, chunks: List[bytes]) -> Any:
+    """
+    Sets up a fake TTY so query_terminal_kitty_graphics can be exercised.
+    Returns the mocked ``sys.stdout.write`` for assertions.
+    """
+    mocker.patch(MODULE + ".sys.stdin.isatty", return_value=True)
+    mocker.patch(MODULE + ".sys.stdout.isatty", return_value=True)
+    mocker.patch(MODULE + ".sys.stdin.fileno", return_value=0)
+    mocked_write = mocker.patch(MODULE + ".sys.stdout.write")
+    mocker.patch(MODULE + ".sys.stdout.flush")
+    mocker.patch("termios.tcgetattr", return_value=[])
+    mocker.patch("termios.tcsetattr")
+    mocker.patch("tty.setcbreak")
+    # readable while there are chunks left to hand out, else time out (empty).
+    reads = list(chunks)
+    mocker.patch(
+        "select.select",
+        side_effect=lambda *a, **k: ([0], [], []) if reads else ([], [], []),
+    )
+    mocker.patch(MODULE + ".os.read", side_effect=lambda *a, **k: reads.pop(0))
+    return mocked_write
+
+
+def test_query_terminal_kitty_graphics__not_a_tty(mocker: MockerFixture) -> None:
+    mocker.patch(MODULE + ".sys.stdin.isatty", return_value=False)
+    mocker.patch(MODULE + ".sys.stdout.isatty", return_value=True)
+
+    assert query_terminal_kitty_graphics() is False
+
+
+def test_query_terminal_kitty_graphics__supported(mocker: MockerFixture) -> None:
+    mocker.patch.dict(MODULE + ".os.environ", {}, clear=True)
+    _mock_tty(mocker, chunks=[b"\x1b_Gi=31;OK\x1b\\"])
+
+    assert query_terminal_kitty_graphics() is True
+
+
+def test_query_terminal_kitty_graphics__unsupported(mocker: MockerFixture) -> None:
+    mocker.patch.dict(MODULE + ".os.environ", {}, clear=True)
+    _mock_tty(mocker, chunks=[])  # no reply -> timeout
+
+    assert query_terminal_kitty_graphics() is False
+
+
+def test_query_terminal_kitty_graphics__tmux_uses_passthrough(
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.dict(MODULE + ".os.environ", {"TMUX": "/tmp/tmux-x"}, clear=True)
+    mocked_run = mocker.patch(MODULE + ".subprocess.run")
+    mocked_write = _mock_tty(mocker, chunks=[b"\x1b_Gi=31;OK\x1b\\"])
+
+    assert query_terminal_kitty_graphics() is True
+    # The pane's allow-passthrough option is best-effort enabled first.
+    assert mocked_run.call_args.args[0][:4] == [
+        "tmux",
+        "set",
+        "-p",
+        "allow-passthrough",
+    ]
+    # The query is written wrapped in tmux passthrough.
+    written = "".join(c.args[0] for c in mocked_write.call_args_list)
+    assert written.startswith("\x1bPtmux;")
 
 
 @pytest.mark.parametrize(
@@ -854,6 +894,30 @@ def test_kitty_graphics_sequence__multiple_chunks() -> None:
         esc.split(";", 1)[1] for esc in sequence.split("\x1b\\") if esc
     )
     assert base64.standard_b64decode(payload) == png
+
+
+def test_kitty_graphics_sequence__tmux_wraps_each_chunk() -> None:
+    png = b"\x89PNG\r\n\x1a\nsmall"
+
+    sequence = kitty_graphics_sequence(png, cols=4, rows=2, tmux=True)
+
+    # The whole (single-chunk) sequence is wrapped in tmux passthrough, with
+    # the inner graphics escape's ESCs doubled.
+    assert sequence.startswith("\x1bPtmux;")
+    assert "\x1b\x1b_Ga=T,f=100,t=d,c=4,r=2,m=0;" in sequence
+    assert sequence.endswith("\x1b\\")
+
+
+@pytest.mark.parametrize(
+    "tmux, expected",
+    [
+        (False, "\x1b_Ga=d,d=A\x1b\\"),
+        (True, "\x1bPtmux;\x1b\x1b_Ga=d,d=A\x1b\x1b\\\x1b\\"),
+    ],
+    ids=["plain", "tmux"],
+)
+def test_kitty_graphics_delete(tmux: bool, expected: str) -> None:
+    assert kitty_graphics_delete(tmux=tmux) == expected
 
 
 def test_process_media_empty_url(

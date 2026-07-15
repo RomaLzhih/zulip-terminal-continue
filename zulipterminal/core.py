@@ -28,13 +28,13 @@ from zulipterminal.config.ui_sizes import (
     MIN_SUPPORTED_POPUP_WIDTH,
 )
 from zulipterminal.helper import (
-    KITTY_GRAPHICS_DELETE,
     asynch,
+    kitty_graphics_delete,
     kitty_graphics_geometry,
     kitty_graphics_sequence,
+    query_terminal_kitty_graphics,
     read_png_dimensions,
     suppress_output,
-    terminal_supports_kitty_graphics,
 )
 from zulipterminal.model import Model
 from zulipterminal.platform_code import PLATFORM
@@ -126,10 +126,12 @@ class Controller:
         self._exception_pipe = self.loop.watch_pipe(self._raise_exception)
 
         # data and urwid pipe for rendering images on the main thread, since
-        # the download runs in a worker thread but the screen takeover must
-        # happen on the main (urwid) thread
+        # the download runs in a worker thread but the screen takeover (and the
+        # one-time graphics-support query) must happen on the main (urwid) thread
         self._image_render_sequence = ""
         self._image_render_rows = 0
+        self._image_rendered = False
+        self._kitty_graphics_supported: Optional[bool] = None
         self._image_render_done = Event()
         self._image_render_pipe = self.loop.watch_pipe(self._render_pending_image)
 
@@ -464,16 +466,20 @@ class Controller:
     def render_image_in_terminal(self, media_path: str) -> bool:
         """
         Renders a PNG image inline via the Kitty graphics protocol (real pixels
-        in Ghostty, Kitty and WezTerm). Returns True if the image was rendered,
-        False for non-PNG images, terminals without graphics support, or inside
-        tmux — so the caller can fall back to opening it in an external app.
+        in Ghostty, Kitty and WezTerm, including inside tmux with passthrough).
+        Returns True if the image was rendered, False for non-PNG images or
+        terminals without graphics support — so the caller can fall back to
+        opening it in an external app.
 
         Safe to call from a worker thread (e.g. the media-download thread): the
-        actual screen takeover is marshaled onto the main (urwid) thread via a
+        actual screen takeover — and the one-time query of whether the terminal
+        supports the protocol — is marshaled onto the main (urwid) thread via a
         pipe, and this call blocks until it completes.
         """
+        if self._kitty_graphics_supported is False:
+            return False
         dimensions = read_png_dimensions(media_path)
-        if dimensions is None or not terminal_supports_kitty_graphics():
+        if dimensions is None:
             return False
         try:
             with open(media_path, "rb") as image_file:
@@ -482,37 +488,46 @@ class Controller:
             return False
         cols, rows = kitty_graphics_geometry(*dimensions)
         self._image_render_sequence = kitty_graphics_sequence(
-            png_bytes, cols=cols, rows=rows
+            png_bytes, cols=cols, rows=rows, tmux=bool(os.environ.get("TMUX"))
         )
         self._image_render_rows = rows
+        self._image_rendered = False
         self._image_render_done.clear()
         # Wake the main loop to run _render_pending_image on the main thread.
         os.write(self._image_render_pipe, b"1")
         self._image_render_done.wait()
-        return True
+        return self._image_rendered
 
     def _render_pending_image(self, *args: Any, **kwargs: Any) -> Literal[True]:
         """
         Runs on the main thread (via the image-render pipe): suspend the urwid
-        screen, draw the image, wait for a keypress, then restore the UI.
+        screen, query graphics support once (cached), draw the image if
+        supported, wait for a keypress, then restore the UI.
         """
         try:
             self.loop.screen.stop()
-            out = sys.stdout
-            out.write("\x1b[2J\x1b[H")  # Clear the terminal, cursor home.
-            out.write(self._image_render_sequence)
-            out.write(
-                f"\x1b[{self._image_render_rows + 1};1H"
-                "-- Press ENTER to return to Zulip Terminal --"
-            )
-            out.flush()
-            try:
-                input()
-            except (EOFError, KeyboardInterrupt):
-                pass
-            # Remove the image and clear before handing the screen back to urwid.
-            out.write(KITTY_GRAPHICS_DELETE + "\x1b[2J\x1b[H")
-            out.flush()
+            if self._kitty_graphics_supported is None:
+                self._kitty_graphics_supported = query_terminal_kitty_graphics()
+            if self._kitty_graphics_supported:
+                out = sys.stdout
+                out.write("\x1b[2J\x1b[H")  # Clear the terminal, cursor home.
+                out.write(self._image_render_sequence)
+                out.write(
+                    f"\x1b[{self._image_render_rows + 1};1H"
+                    "-- Press ENTER to return to Zulip Terminal --"
+                )
+                out.flush()
+                try:
+                    input()
+                except (EOFError, KeyboardInterrupt):
+                    pass
+                # Remove the image and clear before handing back to urwid.
+                out.write(
+                    kitty_graphics_delete(tmux=bool(os.environ.get("TMUX")))
+                    + "\x1b[2J\x1b[H"
+                )
+                out.flush()
+                self._image_rendered = True
             self.loop.screen.start()
             self.loop.draw_screen()
         finally:
