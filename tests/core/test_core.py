@@ -90,6 +90,7 @@ class TestController:
             [
                 mocker.call(controller._draw_screen),
                 mocker.call(controller._raise_exception),
+                mocker.call(controller._render_pending_image),
             ]
         )
 
@@ -459,6 +460,49 @@ class TestController:
         controller.open_in_browser("https://chat.zulip.org/#narrow/stream/test")
 
         mocked_report_error.assert_called_once_with([f"ERROR: {error}"])
+
+    def test_render_image_in_terminal__no_renderer(
+        self, mocker: MockerFixture, controller: Controller
+    ) -> None:
+        mocker.patch(MODULE + ".in_terminal_image_command", return_value=None)
+        mocked_write = mocker.patch(MODULE + ".os.write")
+        controller._image_render_done = mocker.Mock()
+
+        assert controller.render_image_in_terminal("/x.png") is False
+        mocked_write.assert_not_called()
+        controller._image_render_done.wait.assert_not_called()
+
+    def test_render_image_in_terminal__marshals_to_main_thread(
+        self, mocker: MockerFixture, controller: Controller
+    ) -> None:
+        mocker.patch(
+            MODULE + ".in_terminal_image_command", return_value=["chafa", "/x.png"]
+        )
+        mocked_write = mocker.patch(MODULE + ".os.write")
+        controller._image_render_done = mocker.Mock()
+
+        assert controller.render_image_in_terminal("/x.png") is True
+        assert controller._image_render_command == ["chafa", "/x.png"]
+        controller._image_render_done.clear.assert_called_once_with()
+        mocked_write.assert_called_once_with(controller._image_render_pipe, b"1")
+        controller._image_render_done.wait.assert_called_once_with()
+
+    def test__render_pending_image(
+        self, mocker: MockerFixture, controller: Controller
+    ) -> None:
+        controller._image_render_command = ["chafa", "/x.png"]
+        mocked_run = mocker.patch(MODULE + ".subprocess.run")
+        mocker.patch("builtins.input")
+        mocker.patch("builtins.print")
+        controller._image_render_done = mocker.Mock()
+
+        assert controller._render_pending_image() is True
+
+        controller.loop.screen.stop.assert_called_once_with()
+        mocked_run.assert_called_once_with(["chafa", "/x.png"])
+        controller.loop.screen.start.assert_called_once_with()
+        controller.loop.draw_screen.assert_called_once_with()
+        controller._image_render_done.set.assert_called_once_with()
 
     def test_main(self, mocker: MockerFixture, controller: Controller) -> None:
         controller.view.palette = {"default": "theme_properties"}

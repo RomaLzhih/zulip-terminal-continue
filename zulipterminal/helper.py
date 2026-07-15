@@ -3,6 +3,8 @@ Helper functions used in multiple places
 """
 
 import os
+import shlex
+import shutil
 import subprocess
 import time
 from collections import defaultdict
@@ -803,6 +805,61 @@ def suppress_output() -> Iterator[None]:
         os.dup2(stderr, 2)
 
 
+IMAGE_EXTENSIONS = frozenset(
+    {
+        ".apng",
+        ".avif",
+        ".bmp",
+        ".gif",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".svg",
+        ".tif",
+        ".tiff",
+        ".webp",
+    }
+)
+
+
+def is_image_path(path: str) -> bool:
+    """
+    Returns True if the path looks like a still-image file (by file extension)
+    that we can try to render in the terminal.
+    """
+    return os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+def in_terminal_image_command(media_path: str) -> Optional[List[str]]:
+    """
+    Returns a command (argv list) that renders an image inside the current
+    terminal window, or None if no supported renderer is installed.
+
+    A ``$ZULIP_IMAGE_RENDERER`` command (the image path is appended) overrides
+    the autodetection; otherwise the first available of chafa, kitty's icat,
+    wezterm's imgcat, viu or timg is used. chafa is preferred: it targets the
+    Kitty/sixel/iTerm graphics protocols where available and otherwise falls
+    back to truecolor block characters, which also render inside tmux.
+    """
+    override = os.environ.get("ZULIP_IMAGE_RENDERER")
+    if override:
+        argv = shlex.split(override)
+        if argv and shutil.which(argv[0]):
+            return [*argv, media_path]
+        return None
+    if shutil.which("chafa"):
+        return ["chafa", media_path]
+    if shutil.which("kitty"):
+        return ["kitty", "+kitten", "icat", media_path]
+    if shutil.which("wezterm"):
+        return ["wezterm", "imgcat", media_path]
+    for viewer in ("viu", "timg"):
+        if shutil.which(viewer):
+            return [viewer, media_path]
+    return None
+
+
 @asynch
 def process_media(controller: Any, link: str) -> None:
     """
@@ -817,6 +874,16 @@ def process_media(controller: Any, link: str) -> None:
     )
     media_path = download_media(controller, link, show_download_status)
     media_path = normalized_file_path(media_path)
+
+    # Prefer rendering images inside the terminal (works in Ghostty, Kitty and
+    # WezTerm, and — via chafa's block-character fallback — inside tmux). Fall
+    # back to opening the file in the OS default application for non-images or
+    # when no in-terminal image renderer is installed. The controller performs
+    # the screen takeover on the main (urwid) thread, since process_media runs
+    # in a worker thread.
+    if is_image_path(media_path) and controller.render_image_in_terminal(media_path):
+        return
+
     tool = ""
 
     # TODO: Add support for other platforms as well.

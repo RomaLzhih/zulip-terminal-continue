@@ -15,7 +15,9 @@ from zulipterminal.helper import (
     download_media,
     get_unused_fence,
     hash_util_decode,
+    in_terminal_image_command,
     index_messages,
+    is_image_path,
     match_group_pm,
     notify_if_message_sent_outside_narrow,
     open_media,
@@ -677,6 +679,92 @@ def test_process_media(
         controller.show_media_confirmation_popup.assert_called_once_with(
             mocked_open_media, tool, modified_media_path
         )
+
+
+@pytest.mark.parametrize(
+    "rendered_in_terminal, show_media_called",
+    [
+        (True, False),
+        (False, True),
+    ],
+    ids=[
+        "image_rendered_in_terminal",
+        "no_terminal_renderer_falls_back_to_external_app",
+    ],
+)
+def test_process_media__image_prefers_terminal_render(
+    mocker: MockerFixture,
+    rendered_in_terminal: bool,
+    show_media_called: bool,
+    media_path: str = "/path/to/media.png",
+    link: str = "/url/of/media.png",
+) -> None:
+    controller = mocker.Mock()
+    controller.render_image_in_terminal.return_value = rendered_in_terminal
+    mocker.patch(MODULE + ".download_media", return_value=media_path)
+    mocker.patch(MODULE + ".open_media")
+    mocker.patch(MODULE + ".PLATFORM", "MacOS")
+
+    process_media(controller, link)
+
+    controller.render_image_in_terminal.assert_called_once_with(media_path)
+    assert controller.show_media_confirmation_popup.called == show_media_called
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        ("/tmp/zt-abc-image.png", True),
+        ("/tmp/zt-abc-photo.JPG", True),
+        ("/tmp/zt-abc-anim.gif", True),
+        ("/tmp/zt-abc-doc.pdf", False),
+        ("/tmp/zt-abc-clip.mp4", False),
+        ("/tmp/zt-abc-noext", False),
+    ],
+)
+def test_is_image_path(path: str, expected: bool) -> None:
+    assert is_image_path(path) == expected
+
+
+@pytest.mark.parametrize(
+    "env_renderer, which_available, expected_command",
+    [
+        (None, {"chafa"}, ["chafa", "/x.png"]),
+        (None, {"kitty"}, ["kitty", "+kitten", "icat", "/x.png"]),
+        (None, {"wezterm"}, ["wezterm", "imgcat", "/x.png"]),
+        (None, {"viu"}, ["viu", "/x.png"]),
+        (None, {"timg"}, ["timg", "/x.png"]),
+        (None, {"chafa", "kitty", "wezterm"}, ["chafa", "/x.png"]),
+        (None, set(), None),
+        ("myviewer --flag", {"myviewer"}, ["myviewer", "--flag", "/x.png"]),
+        ("myviewer --flag", set(), None),
+    ],
+    ids=[
+        "chafa",
+        "kitty_icat",
+        "wezterm_imgcat",
+        "viu",
+        "timg",
+        "chafa_preferred_over_others",
+        "no_renderer",
+        "env_override",
+        "env_override_not_installed",
+    ],
+)
+def test_in_terminal_image_command(
+    mocker: MockerFixture,
+    env_renderer: Any,
+    which_available: Set[str],
+    expected_command: Any,
+) -> None:
+    env = {} if env_renderer is None else {"ZULIP_IMAGE_RENDERER": env_renderer}
+    mocker.patch.dict(MODULE + ".os.environ", env, clear=True)
+    mocker.patch(
+        MODULE + ".shutil.which",
+        side_effect=lambda cmd: cmd if cmd in which_available else None,
+    )
+
+    assert in_terminal_image_command("/x.png") == expected_command
 
 
 def test_process_media_empty_url(

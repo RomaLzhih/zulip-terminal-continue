@@ -5,11 +5,13 @@ Defines the `Controller`, which sets up the `Model`, `View`, and how they intera
 import itertools
 import os
 import signal
+import subprocess
 import sys
 import time
 import webbrowser
 from functools import partial
 from platform import platform
+from threading import Event
 from types import TracebackType
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
@@ -26,7 +28,11 @@ from zulipterminal.config.ui_sizes import (
     MAX_LINEAR_SCALING_WIDTH,
     MIN_SUPPORTED_POPUP_WIDTH,
 )
-from zulipterminal.helper import asynch, suppress_output
+from zulipterminal.helper import (
+    asynch,
+    in_terminal_image_command,
+    suppress_output,
+)
 from zulipterminal.model import Model
 from zulipterminal.platform_code import PLATFORM
 from zulipterminal.ui import Screen, View
@@ -115,6 +121,13 @@ class Controller:
         self._exception_info: Optional[ExceptionInfo] = None
         self._critical_exception = False
         self._exception_pipe = self.loop.watch_pipe(self._raise_exception)
+
+        # data and urwid pipe for rendering images on the main thread, since
+        # the download runs in a worker thread but the screen takeover must
+        # happen on the main (urwid) thread
+        self._image_render_command: List[str] = []
+        self._image_render_done = Event()
+        self._image_render_pipe = self.loop.watch_pipe(self._render_pending_image)
 
         # Register new ^C handler
         signal.signal(
@@ -443,6 +456,48 @@ class Controller:
         except webbrowser.Error as e:
             # Set a footer text if no runnable browser is located
             self.report_error([f"ERROR: {e}"])
+
+    def render_image_in_terminal(self, media_path: str) -> bool:
+        """
+        Renders an image inside the terminal window, using an external renderer
+        (chafa/kitty icat/wezterm imgcat/viu/timg). Returns True if an image was
+        rendered, False if no in-terminal renderer is available (so the caller
+        can fall back to opening it in an external application).
+
+        Safe to call from a worker thread (e.g. the media-download thread): the
+        actual screen takeover is marshaled onto the main (urwid) thread via a
+        pipe, and this call blocks until it completes.
+        """
+        command = in_terminal_image_command(media_path)
+        if command is None:
+            return False
+        self._image_render_command = command
+        self._image_render_done.clear()
+        # Wake the main loop to run _render_pending_image on the main thread.
+        os.write(self._image_render_pipe, b"1")
+        self._image_render_done.wait()
+        return True
+
+    def _render_pending_image(self, *args: Any, **kwargs: Any) -> Literal[True]:
+        """
+        Runs on the main thread (via the image-render pipe): suspend the urwid
+        screen, draw the image, wait for a keypress, then restore the UI.
+        """
+        command = self._image_render_command
+        try:
+            self.loop.screen.stop()
+            # Clear the terminal, draw the image, then wait for the user.
+            print("\033[2J\033[H", end="", flush=True)
+            subprocess.run(command)
+            try:
+                input("\n-- Press ENTER to return to Zulip Terminal --")
+            except (EOFError, KeyboardInterrupt):
+                pass
+            self.loop.screen.start()
+            self.loop.draw_screen()
+        finally:
+            self._image_render_done.set()
+        return True  # Always retain pipe
 
     @asynch
     def show_typing_notification(self) -> None:

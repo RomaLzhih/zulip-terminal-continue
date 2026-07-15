@@ -91,6 +91,24 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   prefix rule as `match_user`, across every participant). Groups appear only
   while searching; the default panel and the presence-refresh path are
   unchanged.
+- `helper.py: process_media` + `core.py: Controller.render_image_in_terminal` /
+  `_render_pending_image` — opening an uploaded **image** (via the message-info
+  popup `i`, `/user_uploads/` link) now renders it **inside the terminal**
+  instead of only launching an external app. `helper.py: in_terminal_image_command`
+  autodetects a renderer (`$ZULIP_IMAGE_RENDERER` override, else chafa / kitty
+  `+kitten icat` / wezterm `imgcat` / viu / timg); chafa is preferred because it
+  uses the Kitty/sixel/iTerm graphics protocols where available and otherwise
+  truecolor block chars, which also work through tmux. `helper.py: is_image_path`
+  gates on extension; non-images (and the case where no renderer is installed)
+  fall back to the existing `open_media` external-app path. `process_media` is
+  `@asynch` (runs in a worker thread), so the screen takeover is marshaled onto
+  the main urwid thread via a dedicated `watch_pipe` (`_image_render_pipe`) and
+  an `Event` (`_image_render_done`) that blocks the worker until the render
+  finishes; `_render_pending_image` does `screen.stop()` → draw → wait for Enter
+  → `screen.start()` (same suspend/restore pattern as the external editor in
+  `boxes.py`). True inline thumbnails in the scrolling message list are not
+  attempted (urwid's cell grid + tmux make Kitty-protocol placement unreliable);
+  this is a full-window preview.
 - `ui_tools/buttons.py: MessageLinkButton.handle_link` — external web links in
   the Message Information popup (`i`) now open in the default graphical browser.
   Previously `handle_link` only handled Zulip-internal narrow links and
