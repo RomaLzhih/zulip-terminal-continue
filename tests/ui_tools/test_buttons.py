@@ -17,6 +17,7 @@ from zulipterminal.ui_tools.buttons import (
     PMButton,
     StarredButton,
     StreamButton,
+    ThemeButton,
     TopButton,
     TopicButton,
     UserButton,
@@ -228,7 +229,7 @@ class TestStreamButton:
         update_count.assert_called_once_with(unread_count)
 
     @pytest.mark.parametrize("key", keys_for_command("TOGGLE_TOPIC"))
-    def test_keypress_ENTER_TOGGLE_TOPIC(
+    def test_keypress_TOGGLE_TOPIC_expands_inline(
         self,
         mocker: MockerFixture,
         stream_button: StreamButton,
@@ -236,10 +237,32 @@ class TestStreamButton:
         widget_size: Callable[[Widget], urwid_Size],
     ) -> None:
         size = widget_size(stream_button)
-        stream_button.view.left_panel = mocker.Mock()
+        stream_button.view.stream_w = mocker.Mock()
         stream_button.keypress(size, key)
 
-        stream_button.view.left_panel.show_topic_view.assert_called_once_with(
+        # 't' toggles the stream's topics inline, without narrowing.
+        stream_button.view.stream_w.toggle_topics.assert_called_once_with(
+            stream_button
+        )
+        stream_button.controller.narrow_to_stream.assert_not_called()
+
+    @pytest.mark.parametrize("key", keys_for_command("ACTIVATE_BUTTON"))
+    def test_keypress_ACTIVATE_BUTTON_narrows_and_expands(
+        self,
+        mocker: MockerFixture,
+        stream_button: StreamButton,
+        key: str,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        size = widget_size(stream_button)
+        stream_button.view.stream_w = mocker.Mock()
+        stream_button.keypress(size, key)
+
+        # Enter narrows to the whole stream and expands its topics inline.
+        stream_button.controller.narrow_to_stream.assert_called_once_with(
+            stream_name=stream_button.stream_name
+        )
+        stream_button.view.stream_w.toggle_topics.assert_called_once_with(
             stream_button
         )
 
@@ -355,6 +378,38 @@ class TestGroupPMButton:
         )
 
 
+class TestThemeButton:
+    @pytest.mark.parametrize("is_active", [True, False])
+    def test_init(self, mocker: MockerFixture, is_active: bool) -> None:
+        controller = mocker.Mock()
+
+        theme_button = ThemeButton(
+            controller=controller, theme_name="gruvbox_dark", is_active=is_active
+        )
+
+        assert theme_button.theme_name == "gruvbox_dark"
+        caption = theme_button._w.original_widget.text
+        assert "gruvbox_dark" in caption
+        assert (CHECK_MARK in caption) == is_active
+
+    @pytest.mark.parametrize("key", keys_for_command("ACTIVATE_BUTTON"))
+    def test_keypress_ACTIVATE_BUTTON_applies_theme(
+        self,
+        mocker: MockerFixture,
+        key: str,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        controller = mocker.Mock()
+        theme_button = ThemeButton(
+            controller=controller, theme_name="zt_light", is_active=False
+        )
+        size = widget_size(theme_button)
+
+        theme_button.keypress(size, key)
+
+        controller.set_theme.assert_called_once_with("zt_light")
+
+
 class TestEmojiButton:
     @pytest.mark.parametrize(
         "emoji_unit, to_vary_in_message, count",
@@ -404,6 +459,62 @@ class TestEmojiButton:
         )
         assert emoji_button.emoji_name == emoji_unit[0]
         assert emoji_button.reaction_count == count
+
+    def test_init_unicode_emoji_prefixes_glyph(
+        self, mocker: MockerFixture, message_fixture: Message
+    ) -> None:
+        controller = mocker.Mock()
+        controller.model.has_user_reacted_to_message = mocker.Mock(return_value=False)
+        controller.model.active_emoji_data = {
+            "+1": {"code": "1f44d", "type": "unicode_emoji", "aliases": ["thumbs_up"]}
+        }
+        mocker.patch(MODULE + ".EmojiButton.update_check_mark")
+        top_button = mocker.patch(MODULE + ".TopButton.__init__")
+        message_fixture["reactions"] = []
+
+        emoji_button = EmojiButton(
+            controller=controller,
+            emoji_unit=("+1", "1f44d", ["thumbs_up"]),
+            message=message_fixture,
+            reaction_count=0,
+            is_selected=lambda *_: False,
+            toggle_selection=lambda *_: None,
+        )
+
+        top_button.assert_called_once_with(
+            controller=controller,
+            label_markup=(None, chr(0x1F44D) + "  +1, thumbs_up"),
+            show_function=emoji_button.update_emoji_button,
+        )
+
+    def test_init_realm_emoji_keeps_text(
+        self, mocker: MockerFixture, message_fixture: Message
+    ) -> None:
+        controller = mocker.Mock()
+        controller.model.has_user_reacted_to_message = mocker.Mock(return_value=False)
+        # A realm emoji's numeric code would parse as hex; it must not be
+        # rendered as a stray glyph, so the label stays as plain text.
+        controller.model.active_emoji_data = {
+            "octopus": {"code": "123", "type": "realm_emoji", "aliases": []}
+        }
+        mocker.patch(MODULE + ".EmojiButton.update_check_mark")
+        top_button = mocker.patch(MODULE + ".TopButton.__init__")
+        message_fixture["reactions"] = []
+
+        emoji_button = EmojiButton(
+            controller=controller,
+            emoji_unit=("octopus", "123", []),
+            message=message_fixture,
+            reaction_count=0,
+            is_selected=lambda *_: False,
+            toggle_selection=lambda *_: None,
+        )
+
+        top_button.assert_called_once_with(
+            controller=controller,
+            label_markup=(None, "octopus"),
+            show_function=emoji_button.update_emoji_button,
+        )
 
     @pytest.mark.parametrize("key", keys_for_command("ACTIVATE_BUTTON"))
     @pytest.mark.parametrize(

@@ -358,6 +358,38 @@ class TestView:
         set_footer_text.assert_called_once_with()
         assert returned_key == key
 
+    @pytest.mark.parametrize("key", keys_for_command("RESTART"))
+    def test_keypress_RESTART(
+        self,
+        view: View,
+        mocker: MockerFixture,
+        key: str,
+        widget_size: Callable[[Widget], urwid_Box],
+    ) -> None:
+        size = widget_size(view)
+        mocker.patch(CONTROLLER + ".is_in_editor_mode", return_value=False)
+
+        returned_key = view.keypress(size, key)
+
+        view.controller.restart.assert_called_once_with()
+        assert returned_key == key
+
+    @pytest.mark.parametrize("key", keys_for_command("SWITCH_THEME"))
+    def test_keypress_SWITCH_THEME(
+        self,
+        view: View,
+        mocker: MockerFixture,
+        key: str,
+        widget_size: Callable[[Widget], urwid_Box],
+    ) -> None:
+        size = widget_size(view)
+        mocker.patch(CONTROLLER + ".is_in_editor_mode", return_value=False)
+
+        returned_key = view.keypress(size, key)
+
+        view.controller.show_theme_picker.assert_called_once_with()
+        assert returned_key == key
+
     @pytest.mark.parametrize("key", keys_for_command("SEARCH_PEOPLE"))
     @pytest.mark.parametrize("autohide", [True, False], ids=["autohide", "no_autohide"])
     def test_keypress_autohide_users(

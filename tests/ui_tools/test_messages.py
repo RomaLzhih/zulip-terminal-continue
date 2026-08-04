@@ -20,6 +20,7 @@ from zulipterminal.config.symbols import (
     STREAM_TOPIC_SEPARATOR,
     TIME_MENTION_MARKER,
 )
+from zulipterminal.model import Model
 from zulipterminal.ui_tools.messages import MessageBox
 
 
@@ -1806,6 +1807,46 @@ class TestMessageBox:
 
             assert reactions_view.original_widget.text == expected_text
             assert reactions_view.original_widget.attrib == expected_attributes
+
+    @pytest.mark.parametrize(
+        "stored_user_field",
+        [
+            case({}, id="no_user_field"),
+            case({"user": None}, id="empty_user_field"),
+        ],
+    )
+    def test_reactions_view_renders_user_id_only_reaction(
+        self, message_fixture, stored_user_field
+    ):
+        """
+        A reaction identified only by 'user_id' (ie. from a server which no
+        longer sends the deprecated 'user' object) must still render.
+        reactions_view swallows any exception by returning None, so a reaction
+        which get_user_id_from_reaction rejects silently hides every reaction
+        on that message.
+        """
+        self.model.user_id = 1
+        reaction = {
+            "emoji_name": "thumbs_up",
+            "emoji_code": "1f44d",
+            "reaction_type": "unicode_emoji",
+            "user_id": 5,
+            **stored_user_field,
+        }
+        varied_message = dict(message_fixture, reactions=[reaction])
+        msg_box = MessageBox(varied_message, self.model, None)
+
+        with patch.object(
+            self.model,
+            "get_user_id_from_reaction",
+            side_effect=lambda reaction: Model.get_user_id_from_reaction(
+                self.model, reaction
+            ),
+        ), patch.object(self.model, "_all_users_by_id", {5: {"full_name": "Iago"}}):
+            reactions_view = msg_box.reactions_view([reaction])
+
+        assert reactions_view is not None
+        assert reactions_view.original_widget.text == " \U0001f44d Iago  "
 
     @pytest.mark.parametrize(
         "message_links, expected_text, expected_attrib, expected_footlinks_width",

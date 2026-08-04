@@ -27,6 +27,11 @@
 >   compose box (path runs to end of line, `~` expanded) uploads the file on send
 >   and turns into a markdown link; a failed upload aborts the send with a footer
 >   error.
+> - **Compose: paste an image from the clipboard.** Copy a screenshot or image,
+>   then press <kbd>ctrl</kbd>+<kbd>v</kbd> in the compose box to attach it; it
+>   uploads when you send, as `[image.png](...)`. A terminal paste only carries
+>   text, so the clipboard is read directly: macOS works out of the box
+>   (`osascript`), Linux needs `wl-paste` or `xclip`, WSL uses `powershell.exe`.
 > - **Compose: channel-scoped mentions.** When composing to a stream,
 >   `@`-mention suggestions are limited to that channel's subscribers (mentioning
 >   non-members would not notify them). Private compose is unaffected.

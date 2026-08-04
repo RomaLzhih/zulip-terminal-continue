@@ -1,3 +1,4 @@
+import os
 from typing import Any, Callable, Dict, Iterable, List, Set, Tuple
 
 import pytest
@@ -11,6 +12,7 @@ from zulipterminal.helper import (
     UnreadCounts,
     canonicalize_color,
     classify_unread_counts,
+    clipboard_image_to_file,
     display_error_if_present,
     download_media,
     get_unused_fence,
@@ -746,3 +748,99 @@ def test_open_media_tool_exception(
     open_media(controller, tool, media_path)
 
     controller.report_error.assert_called_once_with(error)
+
+
+PNG_DATA = b"\x89PNG\r\n\x1a\nfake"
+
+
+@pytest.fixture()
+def clipboard_paste_folder(mocker: MockerFixture, tmp_path: Any) -> str:
+    """Redirect the paste folder into pytest's temporary area."""
+    mocker.patch(MODULE + ".mkdtemp", return_value=str(tmp_path))
+    return str(tmp_path)
+
+
+def test_clipboard_image_to_file__macos(
+    mocker: MockerFixture, clipboard_paste_folder: str
+) -> None:
+    mocker.patch(MODULE + ".PLATFORM", "MacOS")
+    mocked_run = mocker.patch(MODULE + ".subprocess.run")
+    mocked_run.return_value.returncode = 0
+    # The MacOS script writes the file itself, so emulate a populated file.
+    mocker.patch(MODULE + ".os.path.exists", return_value=True)
+    mocker.patch(MODULE + ".os.path.getsize", return_value=len(PNG_DATA))
+
+    image_path = clipboard_image_to_file()
+
+    # The name is what recipients see as the uploaded link's text.
+    assert image_path == os.path.join(clipboard_paste_folder, "image.png")
+    assert mocked_run.call_args[0][0][:2] == ["osascript", "-"]
+    # The script is passed the file to write, and reads the clipboard as PNG.
+    assert mocked_run.call_args[0][0][2] == image_path
+    assert b"PNGf" in mocked_run.call_args[1]["input"]
+
+
+def test_clipboard_image_to_file__linux(
+    mocker: MockerFixture, clipboard_paste_folder: str
+) -> None:
+    mocker.patch(MODULE + ".PLATFORM", "Linux")
+    mocked_run = mocker.patch(MODULE + ".subprocess.run")
+    mocked_run.return_value.returncode = 0
+    mocked_run.return_value.stdout = PNG_DATA
+
+    image_path = clipboard_image_to_file()
+
+    # The first available tool wins, and its stdout is written out verbatim.
+    assert mocked_run.call_args[0][0][0] == "wl-paste"
+    with open(image_path, "rb") as image_file:
+        assert image_file.read() == PNG_DATA
+
+
+def test_clipboard_image_to_file__linux_falls_back_to_next_tool(
+    mocker: MockerFixture, clipboard_paste_folder: str
+) -> None:
+    mocker.patch(MODULE + ".PLATFORM", "Linux")
+    mocked_run = mocker.patch(
+        MODULE + ".subprocess.run",
+        side_effect=[FileNotFoundError(), mocker.Mock(returncode=0, stdout=PNG_DATA)],
+    )
+
+    clipboard_image_to_file()
+
+    # wl-paste is absent, so xclip is tried instead of failing outright.
+    assert mocked_run.call_args[0][0][0] == "xclip"
+
+
+def test_clipboard_image_to_file__linux_no_tool_installed(
+    mocker: MockerFixture, clipboard_paste_folder: str
+) -> None:
+    mocker.patch(MODULE + ".PLATFORM", "Linux")
+    mocker.patch(MODULE + ".subprocess.run", side_effect=FileNotFoundError())
+
+    with pytest.raises(ValueError, match="wl-paste or xclip is required"):
+        clipboard_image_to_file()
+
+    assert not os.path.exists(clipboard_paste_folder)
+
+
+def test_clipboard_image_to_file__no_image_in_clipboard(
+    mocker: MockerFixture, clipboard_paste_folder: str
+) -> None:
+    mocker.patch(MODULE + ".PLATFORM", "MacOS")
+    mocked_run = mocker.patch(MODULE + ".subprocess.run")
+    mocked_run.return_value.returncode = 1  # osascript fails: no image to read.
+
+    with pytest.raises(ValueError, match="no image in clipboard"):
+        clipboard_image_to_file()
+
+    # The empty paste folder should not be left behind.
+    assert not os.path.exists(clipboard_paste_folder)
+
+
+def test_clipboard_image_to_file__unsupported_platform(
+    mocker: MockerFixture, clipboard_paste_folder: str
+) -> None:
+    mocker.patch(MODULE + ".PLATFORM", "unsupported")
+
+    with pytest.raises(ValueError, match="not supported on this platform"):
+        clipboard_image_to_file()

@@ -812,6 +812,11 @@ class TestModel:
                 202,
                 id="reaction_user",
             ),
+            case(
+                {"user": None, "user_id": 303},
+                303,
+                id="reaction_empty_user_with_user_id",
+            ),
         ],
     )
     def test_get_user_id_from_reaction_success(
@@ -2022,6 +2027,39 @@ class TestModel:
             model, [message_fixture["id"]], last_message=expected_last_msg
         )
 
+    @pytest.mark.parametrize(
+        "sender_is_me",
+        [True, False],
+        ids=["own_message_scrolls_into_view", "others_message_leaves_view_alone"],
+    )
+    def test__handle_message_event_scrolls_to_own_message(
+        self, mocker, model, message_fixture, sender_is_me
+    ):
+        """
+        A message we sent is focused so that it is visible without scrolling
+        down by hand; one from somebody else must not move the view, which
+        would yank the reader away mid-read.
+        """
+        model._have_last_message[repr([])] = True
+        mocker.patch(MODEL + "._update_topic_index")
+        mocker.patch(MODULE + ".index_messages", return_value={})
+        message_view = mocker.Mock(log=[mocker.Mock()])
+        self.controller.view.message_view = message_view
+        mocker.patch(MODULE + ".create_msg_box_list", return_value=["msg_w"])
+        model.notify_user = mocker.Mock()
+        message_fixture["sender_id"] = (
+            model.user_id if sender_is_me else model.user_id + 1
+        )
+        event = {"type": "message", "message": message_fixture}
+
+        model._handle_message_event(event)
+
+        if sender_is_me:
+            # The appended message is now the last entry in the log
+            message_view.set_focus.assert_called_once_with(len(message_view.log) - 1)
+        else:
+            message_view.set_focus.assert_not_called()
+
     def test__handle_message_event_with_flags(self, mocker, model, message_fixture):
         model._have_last_message[repr([])] = True
         mocker.patch(MODEL + "._update_topic_index")
@@ -2174,6 +2212,9 @@ class TestModel:
         model.narrow = narrow
         model.recipients = recipients
         model.user_id = user_profile["user_id"]
+        # The cases above list only the fields the narrow logic uses; supply the
+        # sender, which decides whether the view scrolls to the new message.
+        response = {"sender_id": model.user_id + 1, **response}
         event = {
             "type": "message",
             "message": response,
@@ -2802,11 +2843,15 @@ class TestModel:
             ("foo", [["stream", "boo"], ["topic", "foo"]], 2),
             ("foo", [["stream", "boo"], ["topic", "not foo"]], 1),
             ("foo", [], 2),
+            ("foo", [["stream", "boo"], ["search", "not foo"]], 2),
+            ("", [["pm-with", "foo@zulip.com"], ["search", "not foo"]], 2),
         ],
         ids=[
             "msgbox_updated_in_topic_narrow",
             "msgbox_removed_due_to_topic_narrow_mismatch",
             "msgbox_updated_in_all_messages_narrow",
+            "msgbox_updated_in_stream_search_narrow",
+            "msgbox_updated_in_pm_search_narrow",
         ],
     )
     def test__update_rendered_view(
@@ -2839,11 +2884,13 @@ class TestModel:
             ("foo", [["stream", "boo"], ["topic", "foo"]], False),
             ("foo", [["stream", "boo"], ["topic", "not foo"]], True),
             ("foo", [], False),
+            ("foo", [["stream", "boo"], ["search", "not foo"]], False),
         ],
         ids=[
             "same_topic_narrow",
             "previous_topic_narrow_empty_so_change_narrow",
             "same_all_messages_narrow",
+            "search_narrow_is_not_a_topic_narrow",
         ],
     )
     def test__update_rendered_view_change_narrow(
@@ -3137,6 +3184,42 @@ class TestModel:
         assert len(end_reactions) == expected_number_after
 
         model._update_rendered_view.assert_called_once_with(event_message_id)
+
+    @pytest.mark.parametrize(
+        "reaction_event_schema", ["with_user", "with_user_id", "with_both"]
+    )
+    def test__handle_reaction_event_add_stores_identifiable_user(
+        self,
+        mocker,
+        model,
+        reaction_event_factory,
+        reaction_event_index_factory,
+        reaction_event_schema,
+        event_message_id=2,
+    ):
+        """
+        A reaction added from an event must be readable back by
+        get_user_id_from_reaction; a server which omits the deprecated 'user'
+        object previously left "user": None behind, which made that raise and
+        so hid every reaction on the message until it was re-fetched.
+        """
+        common_args = {"op": "add", "message_id": event_message_id}
+        if reaction_event_schema == "with_user":
+            reaction_event = reaction_event_factory(**common_args, user=True)
+        elif reaction_event_schema == "with_user_id":
+            reaction_event = reaction_event_factory(**common_args, user_id=5140)
+        else:
+            reaction_event = reaction_event_factory(
+                **common_args, user=True, user_id=5140
+            )
+
+        model.index = reaction_event_index_factory([(event_message_id, [])])
+        model._update_rendered_view = mocker.Mock()
+
+        model._handle_reaction_event(reaction_event)
+
+        (added_reaction,) = model.index["messages"][event_message_id]["reactions"]
+        assert model.get_user_id_from_reaction(added_reaction) == 5140
 
     @pytest.mark.parametrize(
         "submessages, event, expected_updated_submessage",

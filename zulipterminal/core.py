@@ -21,7 +21,7 @@ from typing_extensions import Literal
 from zulipterminal.api_types import Composition, Message
 from zulipterminal.config.keys import primary_display_key_for_command
 from zulipterminal.config.symbols import POPUP_CONTENT_BORDER, POPUP_TOP_LINE
-from zulipterminal.config.themes import ThemeSpec
+from zulipterminal.config.themes import ThemeSpec, generate_theme
 from zulipterminal.config.ui_sizes import (
     MAX_LINEAR_SCALING_WIDTH,
     MIN_SUPPORTED_POPUP_WIDTH,
@@ -46,6 +46,7 @@ from zulipterminal.ui_tools.views import (
     PopUpConfirmationView,
     StreamInfoView,
     StreamMembersView,
+    ThemePickerView,
     UserInfoView,
 )
 from zulipterminal.version import ZT_VERSION
@@ -260,6 +261,29 @@ class Controller:
     def show_markdown_help(self) -> None:
         markdown_view = MarkdownHelpView(self, f"Markdown Help Menu {SCROLL_PROMPT}")
         self.show_pop_up(markdown_view, "area:help")
+
+    def show_theme_picker(self) -> None:
+        self.show_pop_up(ThemePickerView(self, "Switch Theme"), "area:help")
+
+    def set_theme(self, theme_name: str) -> None:
+        """
+        Apply a color theme for the rest of the session.
+
+        Re-registering the palette updates the escape sequences urwid emits for
+        each style name; rendered canvases store those names rather than the
+        escapes, so no widget needs rebuilding. urwid only redraws cells whose
+        *content* changed, though, so the screen is cleared to force a full
+        repaint in the new colors.
+        """
+        self.theme_name = theme_name
+        self.theme = generate_theme(
+            theme_name,
+            color_depth=self.color_depth,
+            transparent_background=self.transparency_enabled,
+        )
+        self.loop.screen.register_palette(self.theme)
+        self.loop.screen.clear()
+        self.update_screen()
 
     def show_topic_edit_mode(self, button: Any) -> None:
         self.show_pop_up(EditModeView(self, button), "area:msg")
@@ -671,10 +695,47 @@ class Controller:
         self.client.deregister(queue_id, 1.0)
         sys.exit(0)
 
+    def restart(self) -> None:
+        """
+        Restart the application in place: deregister the event queue, restore
+        the terminal, then re-exec the same command. This lets edited code (an
+        editable install) or a fresh session take effect without manually
+        quitting and relaunching. os.execv replaces this process, so nothing
+        after it runs.
+        """
+        queue_id = self.model.queue_id
+        self.client.deregister(queue_id, 1.0)
+        # Restore the terminal out of raw/alternate-screen mode before handing
+        # off; the re-exec'd process re-initializes urwid itself.
+        self.loop.screen.stop()
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
+    def cancel_compose_on_quit(self) -> bool:
+        """
+        QUIT (ctrl c) with the compose box open cancels the compose - leaving
+        the message body's vim insert mode on the way out - instead of quitting
+        Zulip Terminal, mirroring ctrl c in a shell or in vim's insert mode.
+
+        This lives here rather than in WriteBox.keypress because the terminal
+        turns ctrl c into SIGINT, so it never arrives as a keypress at all.
+
+        Returns True if the compose box was open (and so was closed).
+        """
+        write_box = self.view.write_box
+        if self._editor is not write_box:
+            return False
+        write_box.request_exit_compose()
+        self.update_screen()
+        return True
+
     def no_prompt_exit_handler(self, signum: int, frame: Any) -> None:
+        if self.cancel_compose_on_quit():
+            return
         self.deregister_client()
 
     def prompting_exit_handler(self, signum: int, frame: Any) -> None:
+        if self.cancel_compose_on_quit():
+            return
         question = urwid.Text(
             ("bold", " Please confirm that you wish to exit Zulip-Terminal "),
             "center",

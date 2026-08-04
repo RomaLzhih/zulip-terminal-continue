@@ -157,6 +157,11 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
         'help_text': 'Save current message as a draft',
         'key_category': 'compose_box',
     },
+    'PASTE_IMAGE': {
+        'keys': ['ctrl v'],
+        'help_text': 'Paste an image from the clipboard, to upload on send',
+        'key_category': 'compose_box',
+    },
     'AUTOCOMPLETE': {
         'keys': ['ctrl f'],
         'help_text': ('Autocomplete @mentions, #stream_names, :emoji:'
@@ -338,7 +343,17 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
     },
     'QUIT': {
         'keys': ['ctrl c'],
-        'help_text': 'Quit',
+        'help_text': 'Quit, or close the compose box if composing',
+        'key_category': 'general',
+    },
+    'RESTART': {
+        'keys': ['ctrl x'],
+        'help_text': 'Restart Zulip Terminal in place',
+        'key_category': 'general',
+    },
+    'SWITCH_THEME': {
+        'keys': ['T'],
+        'help_text': 'Switch the color theme for this session',
         'key_category': 'general',
     },
     'USER_INFO': {

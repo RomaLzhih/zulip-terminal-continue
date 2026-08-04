@@ -33,8 +33,11 @@ MODULE = "zulipterminal.config.themes"
 
 expected_complete_themes = {
     "zt_dark",
+    "catppuccin_mocha",
     "gruvbox_dark",
     "gruvbox_light",
+    "nord",
+    "tokyo_night",
     "zt_light",
     "zt_blue",
 }

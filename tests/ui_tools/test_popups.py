@@ -9,6 +9,8 @@ from urwid import Columns, Pile, Text, Widget
 
 from zulipterminal.api_types import Message
 from zulipterminal.config.keys import is_command_key, keys_for_command
+from zulipterminal.config.symbols import CHECK_MARK
+from zulipterminal.config.themes import all_themes
 from zulipterminal.config.ui_mappings import EDIT_MODE_CAPTIONS
 from zulipterminal.helper import CustomProfileData, TidiedUserInfo
 from zulipterminal.ui_tools.messages import MessageBox
@@ -27,6 +29,7 @@ from zulipterminal.ui_tools.views import (
     PopUpView,
     StreamInfoView,
     StreamMembersView,
+    ThemePickerView,
     UserInfoView,
 )
 from zulipterminal.urwid_types import urwid_Size
@@ -890,6 +893,72 @@ class TestEditModeView:
         mode_button.set_selected_mode.assert_called_once_with(mode)
 
 
+class TestThemePickerView:
+    @pytest.fixture(autouse=True)
+    def mock_external_classes(self, mocker: MockerFixture) -> None:
+        self.controller = mocker.Mock()
+        self.controller.theme_name = "zt_dark"
+        mocker.patch.object(
+            self.controller, "maximum_popup_dimensions", return_value=(64, 64)
+        )
+        self.theme_picker_view = ThemePickerView(self.controller, "Switch Theme")
+
+    def marked_themes(self) -> List[str]:
+        return [
+            button.theme_name
+            for button in self.theme_picker_view.log
+            if CHECK_MARK in button._w.original_widget.text
+        ]
+
+    def test_init(self) -> None:
+        listed = [button.theme_name for button in self.theme_picker_view.log]
+
+        assert listed == all_themes()
+        # Only the theme in use is marked
+        assert self.marked_themes() == ["zt_dark"]
+
+    @pytest.mark.parametrize(
+        "key", {*keys_for_command("EXIT_POPUP"), *keys_for_command("SWITCH_THEME")}
+    )
+    def test_keypress_exit_popup(
+        self, key: str, widget_size: Callable[[Widget], urwid_Size]
+    ) -> None:
+        size = widget_size(self.theme_picker_view)
+
+        self.theme_picker_view.keypress(size, key)
+
+        assert self.controller.exit_popup.called
+
+    @pytest.mark.parametrize("key", keys_for_command("ACTIVATE_BUTTON"))
+    def test_keypress_ACTIVATE_BUTTON_applies_theme(
+        self, key: str, widget_size: Callable[[Widget], urwid_Size]
+    ) -> None:
+        size = widget_size(self.theme_picker_view)
+        chosen = all_themes().index("gruvbox_dark")
+        self.theme_picker_view.body.set_focus(chosen)
+
+        self.theme_picker_view.keypress(size, key)
+
+        self.controller.set_theme.assert_called_once_with("gruvbox_dark")
+        # The popup stays open, so themes can be compared before settling on one
+        assert not self.controller.exit_popup.called
+
+    @pytest.mark.parametrize("key", keys_for_command("ACTIVATE_BUTTON"))
+    def test_keypress_ACTIVATE_BUTTON_moves_mark_keeping_focus(
+        self, key: str, widget_size: Callable[[Widget], urwid_Size]
+    ) -> None:
+        size = widget_size(self.theme_picker_view)
+        chosen = all_themes().index("gruvbox_dark")
+        self.theme_picker_view.body.set_focus(chosen)
+        # set_theme is mocked out, so stand in for what it does to the theme name
+        self.controller.theme_name = "gruvbox_dark"
+
+        self.theme_picker_view.keypress(size, key)
+
+        assert self.marked_themes() == ["gruvbox_dark"]
+        assert self.theme_picker_view.body.focus_position == chosen
+
+
 class TestMarkdownHelpView:
     @pytest.fixture(autouse=True)
     def mock_external_classes(self, mocker: MockerFixture) -> None:
@@ -951,9 +1020,59 @@ class TestHelpView:
     def test_keypress_exit_popup(
         self, key: str, widget_size: Callable[[Widget], urwid_Size]
     ) -> None:
+        self.controller.is_in_editor_mode.return_value = False
         size = widget_size(self.help_view)
         self.help_view.keypress(size, key)
         assert self.controller.exit_popup.called
+
+    @pytest.mark.parametrize("key", keys_for_command("SEARCH_MESSAGES"))
+    def test_keypress_SEARCH_HELP_enters_search_mode(
+        self,
+        mocker: MockerFixture,
+        key: str,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        self.controller.is_in_editor_mode.return_value = False
+        size = widget_size(self.help_view)
+        set_focus = mocker.patch.object(self.help_view, "set_focus")
+
+        self.help_view.keypress(size, key)
+
+        set_focus.assert_called_once_with("header")
+        self.controller.enter_editor_mode_with.assert_called_once_with(
+            self.help_view.help_search
+        )
+        assert not self.controller.exit_popup.called
+
+    def test_update_help_list_filters_to_matches(
+        self, mocker: MockerFixture
+    ) -> None:
+        make_table = mocker.patch.object(
+            self.help_view, "make_table_with_categories", return_value=[]
+        )
+
+        self.help_view.update_help_list(new_text="quit")
+
+        assert self.help_view.empty_search is False
+        (filtered_content, _widths), _kwargs = make_table.call_args
+        matched_rows = [row for _cat, rows in filtered_content for row in rows]
+        assert matched_rows  # at least one binding matches "quit"
+        assert all(
+            "quit" in (" ".join(r) if isinstance(r, tuple) else r).lower()
+            for r in matched_rows
+        )
+
+    def test_update_help_list_no_match_shows_error(
+        self, mocker: MockerFixture
+    ) -> None:
+        make_table = mocker.patch.object(
+            self.help_view, "make_table_with_categories"
+        )
+
+        self.help_view.update_help_list(new_text="zzq-no-such-binding")
+
+        assert self.help_view.empty_search is True
+        make_table.assert_not_called()
 
 
 class TestMsgInfoView:

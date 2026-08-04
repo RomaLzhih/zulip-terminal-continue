@@ -42,6 +42,7 @@ from zulipterminal.config.symbols import (
 from zulipterminal.config.ui_mappings import STREAM_ACCESS_TYPE
 from zulipterminal.helper import (
     asynch,
+    clipboard_image_to_file,
     format_string,
     match_emoji,
     match_group,
@@ -69,6 +70,10 @@ DELIMS_MESSAGE_COMPOSE = "\t\n;"
 # Leading characters of a message-body token that trigger live autocomplete
 # suggestions in the footer (mentions, streams, emojis) as the user types.
 AUTOCOMPLETE_PREFIX_CHARS: Final = ("@", "#", ":")
+
+# Compose-box token which uploads a local file on send; the path runs to the
+# end of the line. See WriteBox._expand_attachments and autocomplete_path.
+ATTACH_TOKEN_PREFIX: Final = "@attach:"
 
 # One-line reminder of the supported normal-mode commands, shown in the footer.
 VIM_NORMAL_MODE_HINT: Final = (
@@ -616,6 +621,19 @@ class WriteBox(urwid.Pile):
         return self._process_typeaheads(matched_streams[0], state, matched_streams[1])
 
     def generic_autocomplete(self, text: str, state: Optional[int]) -> Optional[str]:
+        # '@attach:' is handled ahead of the prefix map below: it contains both
+        # '@' and ':', and the map picks the right-most prefix, so the ':' would
+        # otherwise win and offer emojis for what is a path.
+        attach_index = text.rfind(ATTACH_TOKEN_PREFIX)
+        if attach_index > -1:
+            typeaheads, suggestions = self.autocomplete_path(
+                text[attach_index:], ATTACH_TOKEN_PREFIX
+            )
+            typeahead = self._process_typeaheads(typeaheads, state, suggestions)
+            if typeahead:
+                typeahead = text[:attach_index] + typeahead
+            return typeahead
+
         autocomplete_map = {
             "@_": self.autocomplete_users,
             "@_**": self.autocomplete_users,
@@ -683,6 +701,53 @@ class WriteBox(urwid.Pile):
         self.is_in_typeahead_mode = True
         self.view.set_typeahead_footer(reduced_suggestions, state, is_truncated)
         return typeahead
+
+    def autocomplete_path(
+        self, text: str, prefix_string: str
+    ) -> Tuple[List[str], List[str]]:
+        """
+        Complete the filesystem path of an '@attach:<path>' token, shell-style.
+
+        The typed path is split at its last '/' into a directory to list and a
+        partial name to match against, case-insensitively. Directories complete
+        with a trailing '/' so the next completion descends into them, and
+        dotfiles are offered only once the partial name itself starts with '.'.
+        A bare '~' completes to '~/'; the directory is otherwise left exactly as
+        typed (so '~' is not expanded away), matching _expand_attachments, which
+        expands '~' and resolves relative paths against the working directory.
+        """
+        path = text[len(prefix_string) :]
+        if path == "~":
+            return [prefix_string + "~/"], ["~/"]
+
+        separator_index = path.rfind(os.sep)
+        # The directory as typed, keeping its trailing separator; empty for a
+        # bare name, which lists the working directory.
+        typed_directory = path[: separator_index + 1]
+        partial_name = path[separator_index + 1 :]
+
+        try:
+            entries = os.listdir(os.path.expanduser(typed_directory) or ".")
+        except OSError:
+            # Nonexistent or unreadable directory: nothing to suggest.
+            return [], []
+
+        matching_entries = [
+            entry
+            for entry in entries
+            if entry.lower().startswith(partial_name.lower())
+            and (partial_name.startswith(".") or not entry.startswith("."))
+        ]
+        matching_entries.sort(key=str.lower)
+
+        typeaheads = []
+        suggestions = []
+        for entry in matching_entries:
+            full_path = os.path.join(os.path.expanduser(typed_directory), entry)
+            name = entry + os.sep if os.path.isdir(full_path) else entry
+            typeaheads.append(prefix_string + typed_directory + name)
+            suggestions.append(name)
+        return typeaheads, suggestions
 
     def autocomplete_mentions(
         self, text: str, prefix_string: str
@@ -870,6 +935,33 @@ class WriteBox(urwid.Pile):
 
         return emoji_typeahead, emojis
 
+    def request_exit_compose(self) -> None:
+        """
+        Close the compose box, confirming first if a long message would
+        otherwise be lost.
+
+        Shared by EXIT_COMPOSE and by QUIT (ctrl c), which cancels an open
+        compose box rather than quitting the application.
+        """
+        saved_draft = self.model.session_draft_message()
+        self.send_stop_typing_status()
+
+        compose_not_in_edit_mode = self.msg_edit_state is None
+        compose_box_content = self.msg_write_box.edit_text
+        saved_draft_content = saved_draft.get("content") if saved_draft else None
+
+        exceeds_max_length = (
+            len(compose_box_content) >= MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP
+        )
+        not_saved_as_draft = (
+            saved_draft is None or compose_box_content != saved_draft_content
+        )
+
+        if compose_not_in_edit_mode and exceeds_max_length and not_saved_as_draft:
+            self.view.controller.exit_compose_confirmation_popup()
+        else:
+            self.exit_compose_box()
+
     def exit_compose_box(self) -> None:
         self._set_default_footer_after_autocomplete()
         self._set_compose_attributes_to_defaults()
@@ -884,9 +976,9 @@ class WriteBox(urwid.Pile):
     def _refresh_autocomplete_footer_preview(self) -> None:
         """
         Show autocomplete candidates in the footer as the user types a mention,
-        stream, or emoji token in the message body, without waiting for the
-        AUTOCOMPLETE key. The token is the whitespace-delimited word ending at
-        the cursor; if it opens with a recognized prefix we let
+        stream, emoji or '@attach:' path token in the message body, without
+        waiting for the AUTOCOMPLETE key. The token is the whitespace-delimited
+        word ending at the cursor; if it opens with a recognized prefix we let
         generic_autocomplete populate the footer with state=None, which lists
         the matches without selecting one (a preview). Pressing AUTOCOMPLETE
         then cycles through and inserts them as before.
@@ -894,6 +986,13 @@ class WriteBox(urwid.Pile):
         if not self.msg_body_edit_enabled:
             return
         text_before_caret = self.msg_write_box.edit_text[: self.msg_write_box.edit_pos]
+        # An '@attach:' path runs to the end of the line and may contain
+        # spaces, so preview from the token rather than the last word.
+        line = text_before_caret.rsplit("\n", 1)[-1]
+        attach_index = line.rfind(ATTACH_TOKEN_PREFIX)
+        if attach_index > -1:
+            self.generic_autocomplete(line[attach_index:], None)
+            return
         token = re.split(r"\s", text_before_caret)[-1]
         if token[:1] in AUTOCOMPLETE_PREFIX_CHARS:
             self.generic_autocomplete(token, None)
@@ -933,6 +1032,31 @@ class WriteBox(urwid.Pile):
                 self._set_default_footer_after_autocomplete()
             self._refresh_autocomplete_footer_preview()
 
+    def _paste_clipboard_image(self) -> None:
+        """
+        Write the clipboard's image to a temporary file and insert an
+        '@attach:<path>' token for it at the cursor, which uploads on send.
+        """
+        try:
+            image_path = clipboard_image_to_file()
+        except ValueError as e:
+            self.view.controller.report_error([f"Paste failed: {e}"])
+            return
+
+        text = self.msg_write_box.edit_text
+        cursor = self.msg_write_box.edit_pos
+        before, after = text[:cursor], text[cursor:]
+        # The token runs to the end of its line, so keep it on a line of its
+        # own rather than swallowing whatever the message already says.
+        token = f"{ATTACH_TOKEN_PREFIX}{image_path}\n"
+        if before and not before.endswith("\n"):
+            token = "\n" + token
+        self.msg_write_box.edit_text = before + token + after
+        self.msg_write_box.edit_pos = len(before) + len(token)
+        self.view.controller.report_success(
+            [" Image pasted; it uploads when you send the message"]
+        )
+
     def _expand_attachments(self, content: str) -> Optional[str]:
         """
         Upload files referenced by '@attach:<path>' tokens (path runs to the
@@ -951,7 +1075,7 @@ class WriteBox(urwid.Pile):
             return f"[{os.path.basename(path)}]({link})"
 
         try:
-            return re.sub(r"@attach:(.+)", upload, content)
+            return re.sub(re.escape(ATTACH_TOKEN_PREFIX) + r"(.+)", upload, content)
         except (OSError, ValueError) as e:
             self.view.controller.report_error([f"Attachment failed: {e}"])
             return None
@@ -978,6 +1102,10 @@ class WriteBox(urwid.Pile):
         ):
             self.msg_write_box.enter_normal_mode()
             self._set_vim_normal_mode_footer()
+            return None
+
+        if is_command_key("PASTE_IMAGE", key) and self.msg_body_edit_enabled:
+            self._paste_clipboard_image()
             return None
 
         if is_command_key("SEND_MESSAGE", key):
@@ -1042,7 +1170,12 @@ class WriteBox(urwid.Pile):
             if success:
                 self.msg_write_box.edit_text = ""
                 if self.msg_edit_state is not None:
-                    self.keypress(size, primary_key_for_command("EXIT_COMPOSE"))
+                    # Exit compose directly rather than routing EXIT_COMPOSE back
+                    # through keypress: with the (vim) message body focused in
+                    # insert mode, that key is intercepted to enter normal mode
+                    # instead of exiting, which would leave msg_edit_state set
+                    # (and trip the assert below, crashing the app on ctrl-d).
+                    self.exit_compose_box()
                     assert self.msg_edit_state is None
         elif is_command_key("NARROW_MESSAGE_RECIPIENT", key):
             if self.compose_box_status == "open_with_stream":
@@ -1066,24 +1199,7 @@ class WriteBox(urwid.Pile):
                         "Cannot narrow to message without specifying recipients."
                     )
         elif is_command_key("EXIT_COMPOSE", key):
-            saved_draft = self.model.session_draft_message()
-            self.send_stop_typing_status()
-
-            compose_not_in_edit_mode = self.msg_edit_state is None
-            compose_box_content = self.msg_write_box.edit_text
-            saved_draft_content = saved_draft.get("content") if saved_draft else None
-
-            exceeds_max_length = (
-                len(compose_box_content) >= MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP
-            )
-            not_saved_as_draft = (
-                saved_draft is None or compose_box_content != saved_draft_content
-            )
-
-            if compose_not_in_edit_mode and exceeds_max_length and not_saved_as_draft:
-                self.view.controller.exit_compose_confirmation_popup()
-            else:
-                self.exit_compose_box()
+            self.request_exit_compose()
         elif is_command_key("MARKDOWN_HELP", key):
             self.view.controller.show_markdown_help()
             return key

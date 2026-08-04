@@ -1,5 +1,7 @@
 import datetime
+import os
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import pytest
@@ -26,6 +28,7 @@ from zulipterminal.config.symbols import (
 from zulipterminal.config.ui_mappings import StreamAccessType
 from zulipterminal.helper import Index, MinimalUserData
 from zulipterminal.ui_tools.boxes import (
+    ATTACH_TOKEN_PREFIX,
     MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP,
     PanelSearchBox,
     VimEditBox,
@@ -290,6 +293,30 @@ class TestWriteBox:
         write_box.keypress(size, key)
 
         write_box.view.controller.exit_compose_confirmation_popup.assert_called_once()
+
+    def test_request_exit_compose_closes_compose_from_insert_mode(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        user_id_email_dict: Dict[int, str],
+    ) -> None:
+        """
+        QUIT (ctrl c) closes the compose box directly from vim insert mode,
+        where ESC would only switch the message body to normal mode.
+        """
+        mocker.patch("urwid.connect_signal")
+        write_box.model.user_id_email_dict = user_id_email_dict
+        write_box.private_box_view(recipient_user_ids=[11])
+        write_box.msg_write_box.edit_text = "." * (
+            MAX_MESSAGE_LENGTH_CONFIRMATION_POPUP - 1
+        )
+        assert write_box.msg_write_box.vim_mode == "insert"
+
+        write_box.request_exit_compose()
+
+        write_box.view.controller.exit_compose_confirmation_popup.assert_not_called()
+        assert write_box.compose_box_status == "closed"
+        assert write_box.msg_write_box.edit_text == ""
 
     @pytest.mark.parametrize("key", keys_for_command("EXIT_COMPOSE"))
     def test__compose_attributes_reset_for_stream_compose__no_popup(
@@ -1277,6 +1304,133 @@ class TestWriteBox:
         typeahead_string = write_box.generic_autocomplete(text, state)
         assert typeahead_string == required_typeahead
 
+    @pytest.fixture
+    def attachment_dir(self, tmp_path: Path) -> Path:
+        """A small tree to complete '@attach:' paths against."""
+        (tmp_path / "Documents" / "nested").mkdir(parents=True)
+        (tmp_path / "Documents" / "my file.png").touch()
+        (tmp_path / "Downloads").mkdir()
+        (tmp_path / "report.pdf").touch()
+        (tmp_path / "Report2.PDF").touch()
+        (tmp_path / "notes.txt").touch()
+        (tmp_path / ".hidden").touch()
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        "partial_path, expected_suggestions",
+        [
+            case(
+                "",
+                ["Documents/", "Downloads/", "notes.txt", "report.pdf", "Report2.PDF"],
+                id="whole_directory_sorted_case_insensitively_without_dotfiles",
+            ),
+            case("re", ["report.pdf", "Report2.PDF"], id="partial_name"),
+            case("REP", ["report.pdf", "Report2.PDF"], id="partial_name_wrong_case"),
+            case("Doc", ["Documents/"], id="directory_gains_trailing_separator"),
+            case(
+                "Documents/",
+                ["my file.png", "nested/"],
+                id="inside_a_completed_directory",
+            ),
+            case(
+                "Documents/my",
+                ["my file.png"],
+                id="name_containing_a_space",
+            ),
+            case(".", [".hidden"], id="dotfiles_once_explicitly_requested"),
+            case("nomatch", [], id="no_match"),
+        ],
+    )
+    def test_autocomplete_path(
+        self,
+        write_box: WriteBox,
+        attachment_dir: Path,
+        partial_path: str,
+        expected_suggestions: List[str],
+    ) -> None:
+        typed_path = f"{attachment_dir}{os.sep}{partial_path}"
+
+        typeaheads, suggestions = write_box.autocomplete_path(
+            ATTACH_TOKEN_PREFIX + typed_path, ATTACH_TOKEN_PREFIX
+        )
+
+        assert suggestions == expected_suggestions
+        # Each typeahead re-forms the token from the directory as it was typed
+        typed_directory = typed_path[: typed_path.rfind(os.sep) + 1]
+        assert typeaheads == [
+            f"{ATTACH_TOKEN_PREFIX}{typed_directory}{suggestion}"
+            for suggestion in expected_suggestions
+        ]
+
+    def test_autocomplete_path_unreadable_directory(
+        self, write_box: WriteBox, attachment_dir: Path
+    ) -> None:
+        typed = f"{ATTACH_TOKEN_PREFIX}{attachment_dir}{os.sep}nonexistent{os.sep}x"
+
+        assert write_box.autocomplete_path(typed, ATTACH_TOKEN_PREFIX) == ([], [])
+
+    def test_autocomplete_path_home_shorthand(self, write_box: WriteBox) -> None:
+        """'~' completes to '~/' rather than being expanded away."""
+        typeaheads, suggestions = write_box.autocomplete_path(
+            f"{ATTACH_TOKEN_PREFIX}~", ATTACH_TOKEN_PREFIX
+        )
+
+        assert typeaheads == [f"{ATTACH_TOKEN_PREFIX}~/"]
+        assert suggestions == ["~/"]
+
+    @pytest.mark.parametrize(
+        "prefix_text",
+        ["", "please see ", "@**Human Myself** see "],
+        ids=["token_alone", "text_before_token", "mention_before_token"],
+    )
+    @pytest.mark.parametrize(
+        "state, expected_name",
+        [(0, "report.pdf"), (1, "Report2.PDF"), (2, None), (-1, "Report2.PDF")],
+    )
+    def test_generic_autocomplete_path(
+        self,
+        write_box: WriteBox,
+        attachment_dir: Path,
+        prefix_text: str,
+        state: Optional[int],
+        expected_name: Optional[str],
+    ) -> None:
+        """
+        '@attach:' wins over the ':' emoji prefix despite starting earlier in
+        the text, and only the token itself is rewritten.
+        """
+        typed = f"{prefix_text}{ATTACH_TOKEN_PREFIX}{attachment_dir}{os.sep}re"
+
+        typeahead = write_box.generic_autocomplete(typed, state)
+
+        if expected_name is None:
+            assert typeahead is None
+        else:
+            assert typeahead == (
+                f"{prefix_text}{ATTACH_TOKEN_PREFIX}"
+                f"{attachment_dir}{os.sep}{expected_name}"
+            )
+
+    def test__refresh_autocomplete_footer_preview_path_with_space(
+        self, mocker: MockerFixture, write_box: WriteBox, attachment_dir: Path
+    ) -> None:
+        """
+        The preview reads the '@attach:' token from the start of the line, not
+        the last whitespace-delimited word, since a path may contain spaces.
+        """
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        write_box.msg_write_box.edit_text = (
+            f"{ATTACH_TOKEN_PREFIX}{attachment_dir}{os.sep}Documents{os.sep}my "
+        )
+        write_box.msg_write_box.edit_pos = len(write_box.msg_write_box.edit_text)
+
+        write_box._refresh_autocomplete_footer_preview()
+
+        suggestions, state, _ = write_box.view.set_typeahead_footer.call_args[0]
+        assert suggestions == ["my file.png"]
+        assert state is None  # a preview highlights nothing
+
     @pytest.mark.parametrize(
         "text, matching_users, matching_users_info",
         [
@@ -1768,6 +1922,39 @@ class TestWriteBox:
                 content=write_box.msg_write_box.edit_text,
             )
 
+    @pytest.mark.parametrize("key", keys_for_command("SEND_MESSAGE"))
+    def test_keypress_SEND_MESSAGE_edit_in_insert_mode_exits_without_crash(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        key: str,
+    ) -> None:
+        # Regression: sending a message edit with the (vim) body focused in
+        # insert mode used to route EXIT_COMPOSE back through keypress, where the
+        # vim handling intercepts it to enter normal mode rather than exiting.
+        # That left msg_edit_state set and tripped an assert, which escaped
+        # keypress and closed the whole app on ctrl-d.
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        write_box.msg_write_box.edit_text = "edited content"
+        write_box.msg_edit_state = _MessageEditState(
+            message_id=10, old_topic="topic"
+        )
+        write_box.edit_mode_button = mocker.Mock(mode="change_one")
+        write_box.model.update_stream_message = mocker.Mock(return_value=True)
+        # Focus the message body, still in the default (insert) vim mode.
+        write_box.focus_position = write_box.FOCUS_CONTAINER_MESSAGE
+        assert write_box.msg_write_box.vim_mode == "insert"
+        size = widget_size(write_box)
+
+        # Must not raise: previously an AssertionError here closed the app.
+        write_box.keypress(size, key)
+
+        write_box.model.update_stream_message.assert_called_once()
+        assert write_box.msg_edit_state is None
+        assert write_box.compose_box_status == "closed"
+
     @pytest.mark.parametrize(
         "key, current_typeahead_mode, expected_typeahead_mode",
         [
@@ -2009,6 +2196,80 @@ class TestWriteBox:
         write_box.keypress(size, key)
 
         write_box.view.controller.show_markdown_help.assert_called_once_with()
+
+    @pytest.mark.parametrize(
+        "initial_text, cursor, expected_text",
+        [
+            case("", 0, "@attach:{}\n", id="empty_box"),
+            case("look at this", 12, "look at this\n@attach:{}\n", id="after_text"),
+            case(
+                "ends with newline\n",
+                18,
+                "ends with newline\n@attach:{}\n",
+                id="no_extra_blank_line",
+            ),
+            case("before after", 7, "before \n@attach:{}\nafter", id="mid_line_cursor"),
+        ],
+    )
+    def test_keypress_PASTE_IMAGE(
+        self,
+        write_box: WriteBox,
+        mocker: MockerFixture,
+        widget_size: Callable[[Widget], urwid_Size],
+        initial_text: str,
+        cursor: int,
+        expected_text: str,
+        image_path: str = "/tmp/zt-paste-abc.png",
+    ) -> None:
+        mocker.patch(MODULE + ".clipboard_image_to_file", return_value=image_path)
+        write_box.private_box_view()
+        write_box.msg_write_box.edit_text = initial_text
+        write_box.msg_write_box.edit_pos = cursor
+        size = widget_size(write_box)
+
+        write_box.keypress(size, primary_key_for_command("PASTE_IMAGE"))
+
+        # The token is inserted on a line of its own, so that the path (which
+        # runs to the end of the line) does not swallow the message text.
+        assert write_box.msg_write_box.edit_text == expected_text.format(image_path)
+        write_box.view.controller.report_error.assert_not_called()
+
+    def test_keypress_PASTE_IMAGE__no_image_reports_error(
+        self,
+        write_box: WriteBox,
+        mocker: MockerFixture,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        mocker.patch(
+            MODULE + ".clipboard_image_to_file",
+            side_effect=ValueError("no image in clipboard"),
+        )
+        write_box.private_box_view()
+        write_box.msg_write_box.edit_text = "unchanged"
+        size = widget_size(write_box)
+
+        write_box.keypress(size, primary_key_for_command("PASTE_IMAGE"))
+
+        assert write_box.msg_write_box.edit_text == "unchanged"
+        write_box.view.controller.report_error.assert_called_once_with(
+            ["Paste failed: no image in clipboard"]
+        )
+
+    def test_keypress_PASTE_IMAGE__ignored_when_body_not_editable(
+        self,
+        write_box: WriteBox,
+        mocker: MockerFixture,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        mocked_clipboard = mocker.patch(MODULE + ".clipboard_image_to_file")
+        write_box.private_box_view()
+        # Editing only a topic, where there is no message body to paste into.
+        write_box.msg_body_edit_enabled = False
+        size = widget_size(write_box)
+
+        write_box.keypress(size, primary_key_for_command("PASTE_IMAGE"))
+
+        mocked_clipboard.assert_not_called()
 
     @pytest.mark.parametrize(
         "msg_type, expected_box_size",

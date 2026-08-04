@@ -502,7 +502,9 @@ class Model:
     ) -> int:
         # The reaction.user_id field was added in Zulip v3.0, ZFL 2 so we need to
         # check both the reaction.user.{user_id/id} fields too for pre v3 support.
-        user = reaction.get("user", {})
+        # 'user' may also be present but empty (eg. reactions stored by an older
+        # version of _handle_reaction_event), so treat that as absent too.
+        user = reaction.get("user") or {}
         assert isinstance(user, dict)
         user_id = user.get("id") or user.get("user_id") or reaction.get("user_id")
         assert isinstance(user_id, int)
@@ -1804,6 +1806,13 @@ class Model:
 
             if self.current_narrow_contains_message(message):
                 msg_log.append(msg_w)
+                # Scroll to a message we sent ourselves, so it is visible
+                # without scrolling down by hand: appending alone only reveals
+                # it when the focus already sits on the previously last
+                # message. Messages from others deliberately do not move the
+                # view, which would yank the reader away mid-read.
+                if message["sender_id"] == self.user_id:
+                    self.controller.view.message_view.set_focus(len(msg_log) - 1)
 
             self.controller.update_screen()
 
@@ -1901,6 +1910,11 @@ class Model:
         if message_id in self.index["messages"]:
             message = self.index["messages"][message_id]
             if event["op"] == "add":
+                # Only copy across the keys the event actually carries: a
+                # server which no longer sends the deprecated 'user' object
+                # (superseded by 'user_id' in Zulip v3.0, ZFL 2) would
+                # otherwise leave "user": None in the stored reaction, which
+                # get_user_id_from_reaction rejects.
                 reactions_entry = {
                     key: event.get(key)
                     for key in [
@@ -1910,6 +1924,7 @@ class Model:
                         "emoji_name",
                         "user_id",
                     ]
+                    if key in event
                 }
 
                 # Convert from reaction event schema to message reactions schema
@@ -2053,9 +2068,12 @@ class Model:
             msg_box = msg_w.original_widget
             if msg_box.message["id"] == msg_id:
                 # Remove the message if it no longer belongs in the current
-                # narrow.
+                # narrow. Only a topic narrow can be invalidated this way; a
+                # two-element narrow may instead be a search within another
+                # narrow, whose second term is the query, not a topic.
                 if (
                     len(self.narrow) == 2
+                    and self.narrow[1][0] == "topic"
                     and msg_box.message["subject"] != self.narrow[1][1]
                 ):
                     view.message_view.log.remove(msg_w)

@@ -1,4 +1,5 @@
 import os
+import signal
 import webbrowser
 from platform import platform
 from threading import Thread, Timer
@@ -92,6 +93,122 @@ class TestController:
                 mocker.call(controller._raise_exception),
             ]
         )
+
+    def test_restart(
+        self, controller: Controller, mocker: MockerFixture
+    ) -> None:
+        execv = mocker.patch(MODULE + ".os.execv")
+        mocker.patch(MODULE + ".sys.executable", "/py")
+        mocker.patch(MODULE + ".sys.argv", ["zulip-term", "--foo"])
+        controller.model.queue_id = "queue_101"
+
+        controller.restart()
+
+        controller.client.deregister.assert_called_once_with("queue_101", 1.0)
+        controller.loop.screen.stop.assert_called_once_with()
+        # Re-exec the same command via the interpreter, replacing this process.
+        execv.assert_called_once_with("/py", ["/py", "zulip-term", "--foo"])
+
+    def test_cancel_compose_on_quit__compose_open(
+        self, controller: Controller, mocker: MockerFixture
+    ) -> None:
+        write_box = mocker.Mock()
+        controller.view.write_box = write_box
+        controller.enter_editor_mode_with(write_box)
+        controller.update_screen = mocker.Mock()
+
+        assert controller.cancel_compose_on_quit() is True
+
+        write_box.request_exit_compose.assert_called_once_with()
+        controller.update_screen.assert_called_once_with()
+
+    @pytest.mark.parametrize(
+        "other_editor",
+        [False, True],
+        ids=["not_in_editor_mode", "editing_a_different_box"],
+    )
+    def test_cancel_compose_on_quit__compose_closed(
+        self, controller: Controller, mocker: MockerFixture, other_editor: bool
+    ) -> None:
+        write_box = mocker.Mock()
+        controller.view.write_box = write_box
+        if other_editor:
+            controller.enter_editor_mode_with(mocker.Mock())
+        controller.update_screen = mocker.Mock()
+
+        assert controller.cancel_compose_on_quit() is False
+
+        write_box.request_exit_compose.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "handler_name", ["no_prompt_exit_handler", "prompting_exit_handler"]
+    )
+    def test_exit_handler_cancels_compose_instead_of_quitting(
+        self, controller: Controller, mocker: MockerFixture, handler_name: str
+    ) -> None:
+        cancel_compose = mocker.patch.object(
+            controller, "cancel_compose_on_quit", return_value=True
+        )
+        deregister_client = mocker.patch.object(controller, "deregister_client")
+
+        getattr(controller, handler_name)(signal.SIGINT, None)
+
+        cancel_compose.assert_called_once_with()
+        deregister_client.assert_not_called()
+        controller.loop.run.assert_not_called()
+
+    def test_no_prompt_exit_handler_quits_when_not_composing(
+        self, controller: Controller, mocker: MockerFixture
+    ) -> None:
+        mocker.patch.object(controller, "cancel_compose_on_quit", return_value=False)
+        deregister_client = mocker.patch.object(controller, "deregister_client")
+
+        controller.no_prompt_exit_handler(signal.SIGINT, None)
+
+        deregister_client.assert_called_once_with()
+
+    def test_prompting_exit_handler_prompts_when_not_composing(
+        self, controller: Controller, mocker: MockerFixture
+    ) -> None:
+        mocker.patch.object(controller, "cancel_compose_on_quit", return_value=False)
+        popup = mocker.patch(MODULE + ".PopUpConfirmationView")
+
+        controller.prompting_exit_handler(signal.SIGINT, None)
+
+        assert controller.loop.widget == popup.return_value
+        controller.loop.run.assert_called_once_with()
+
+    def test_show_theme_picker(
+        self, controller: Controller, mocker: MockerFixture
+    ) -> None:
+        popup = mocker.patch(MODULE + ".Controller.show_pop_up")
+        theme_picker_view = mocker.patch(MODULE + ".ThemePickerView")
+
+        controller.show_theme_picker()
+
+        theme_picker_view.assert_called_once_with(controller, "Switch Theme")
+        popup.assert_called_once_with(theme_picker_view.return_value, "area:help")
+
+    def test_set_theme(self, controller: Controller, mocker: MockerFixture) -> None:
+        generate_theme = mocker.patch(MODULE + ".generate_theme")
+        controller.color_depth = 256
+        controller.transparency_enabled = False
+        controller.update_screen = mocker.Mock()
+
+        controller.set_theme("gruvbox_dark")
+
+        assert controller.theme_name == "gruvbox_dark"
+        generate_theme.assert_called_once_with(
+            "gruvbox_dark", color_depth=256, transparent_background=False
+        )
+        assert controller.theme == generate_theme.return_value
+        # Re-registering updates the escapes urwid emits per style name; the
+        # clear forces a repaint of cells whose content did not change.
+        controller.loop.screen.register_palette.assert_called_once_with(
+            generate_theme.return_value
+        )
+        controller.loop.screen.clear.assert_called_once_with()
+        controller.update_screen.assert_called_once_with()
 
     def test_initial_editor_mode(self, controller: Controller) -> None:
         assert not controller.is_in_editor_mode()

@@ -542,6 +542,51 @@ class TestStreamsView:
             [mocker.call(size, key)] * SIDE_PANELS_MOUSE_SCROLL_LINES
         )
 
+    def test_toggle_topics_expands_then_collapses(self, mocker, stream_view):
+        mocker.patch(VIEWS + ".TopicButton")
+        stream_btn = self.streams_btn_list[0]
+        stream_btn.stream_id = 1
+        self.view.model.topics_in_stream.return_value = ["topic A", "topic B"]
+        self.view.model.unread_counts = {"unread_topics": {}}
+
+        # Expand: two indented topic rows appear directly under the stream.
+        stream_view.toggle_topics(stream_btn)
+        assert stream_view.expanded_stream_button is stream_btn
+        assert len(stream_view.expanded_topic_buttons) == 2
+        assert list(stream_view.log) == [
+            stream_btn,
+            *stream_view.expanded_topic_buttons,
+        ]
+        assert all(
+            isinstance(w, urwid.Padding) for w in stream_view.expanded_topic_buttons
+        )
+
+        # Collapse: activating the same stream again removes the topic rows.
+        stream_view.toggle_topics(stream_btn)
+        assert stream_view.expanded_stream_button is None
+        assert stream_view.expanded_topic_buttons == []
+        assert list(stream_view.log) == [stream_btn]
+
+    def test_toggle_topics_switches_expanded_stream(self, mocker, stream_view):
+        mocker.patch(VIEWS + ".TopicButton")
+        stream_btn_a = self.streams_btn_list[0]
+        stream_btn_a.stream_id = 1
+        stream_btn_b = mocker.Mock(stream_id=2)
+        stream_view.log.append(stream_btn_b)
+        self.view.model.topics_in_stream.return_value = ["topic"]
+        self.view.model.unread_counts = {"unread_topics": {}}
+
+        stream_view.toggle_topics(stream_btn_a)
+        # Expanding a different stream collapses the first before expanding.
+        stream_view.toggle_topics(stream_btn_b)
+
+        assert stream_view.expanded_stream_button is stream_btn_b
+        assert list(stream_view.log) == [
+            stream_btn_a,
+            stream_btn_b,
+            *stream_view.expanded_topic_buttons,
+        ]
+
     @pytest.mark.parametrize("key", keys_for_command("SEARCH_STREAMS"))
     def test_keypress_SEARCH_STREAMS(self, mocker, stream_view, key, widget_size):
         size = widget_size(stream_view)

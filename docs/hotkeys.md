@@ -11,7 +11,9 @@
 |Copy information from About Menu to clipboard|<kbd>c</kbd>|
 |Copy traceback from Exception Popup to clipboard|<kbd>c</kbd>|
 |Redraw screen|<kbd>Ctrl</kbd> + <kbd>l</kbd>|
-|Quit|<kbd>Ctrl</kbd> + <kbd>c</kbd>|
+|Quit, or close the compose box if composing|<kbd>Ctrl</kbd> + <kbd>c</kbd>|
+|Restart Zulip Terminal in place|<kbd>Ctrl</kbd> + <kbd>x</kbd>|
+|Switch the color theme for this session|<kbd>T</kbd>|
 |New footer hotkey hint|<kbd>Tab</kbd>|
 
 ## Navigation
@@ -93,9 +95,10 @@
 |Cycle through recipient and content boxes|<kbd>Tab</kbd>|
 |Send a message|<kbd>Ctrl</kbd> + <kbd>d</kbd> / <kbd>Meta</kbd> + <kbd>Enter</kbd>|
 |Save current message as a draft|<kbd>Meta</kbd> + <kbd>s</kbd>|
+|Paste an image from the clipboard, to upload on send|<kbd>Ctrl</kbd> + <kbd>v</kbd>|
 |Autocomplete @mentions, #stream_names, :emoji: and topics|<kbd>Ctrl</kbd> + <kbd>f</kbd>|
 |Cycle through autocomplete suggestions in reverse|<kbd>Ctrl</kbd> + <kbd>r</kbd>|
-|Exit message compose box|<kbd>Esc</kbd>|
+|Exit compose box (in the body, first enters vim normal mode)|<kbd>Esc</kbd>|
 |Insert new line|<kbd>Enter</kbd>|
 |Open an external editor to edit the message content|<kbd>Ctrl</kbd> + <kbd>o</kbd>|
 

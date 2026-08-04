@@ -10,7 +10,8 @@ from contextlib import contextmanager
 from functools import partial, wraps
 from itertools import chain, combinations
 from re import ASCII, MULTILINE, findall, match
-from tempfile import NamedTemporaryFile
+from shutil import rmtree
+from tempfile import NamedTemporaryFile, mkdtemp
 from threading import Thread
 from typing import (
     Any,
@@ -885,3 +886,103 @@ def open_media(controller: Any, tool: str, media_path: str) -> None:
 
     if error:
         controller.report_error(error)
+
+
+# Reads the clipboard's image (not a file path) and writes it out as a PNG.
+# The clipboard is a GUI resource, so each platform needs its own tool; on
+# MacOS osascript is always present, whereas the Linux/WSL tools may not be.
+CLIPBOARD_IMAGE_TOOLS = {
+    "Linux": (
+        ["wl-paste", "--type", "image/png"],
+        ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+    ),
+    "WSL": (["powershell.exe", "-NoProfile", "-Command", "-"],),
+}
+
+# Writes the clipboard image to the file named by the first argument. Fails
+# (non-zero) when the clipboard holds no image, leaving no file behind. The
+# 'on run' handler is what makes argv visible to the script.
+MACOS_CLIPBOARD_SCRIPT = """\
+on run argv
+    set imagePath to item 1 of argv
+    set pngData to (the clipboard as «class PNGf»)
+    set fileRef to open for access (POSIX file imagePath) with write permission
+    set eof fileRef to 0
+    write pngData to fileRef
+    close access fileRef
+end run
+"""
+
+WSL_CLIPBOARD_SCRIPT = """\
+Add-Type -AssemblyName System.Windows.Forms
+$image = [System.Windows.Forms.Clipboard]::GetImage()
+if ($image -eq $null) {{ exit 1 }}
+$image.Save('{path}', [System.Drawing.Imaging.ImageFormat]::Png)
+"""
+
+
+def clipboard_image_to_file() -> str:
+    """
+    Write the clipboard's image to a temporary PNG, returning its path.
+    Raises ValueError if the clipboard holds no image, or if the platform
+    has no usable tool to read it.
+    """
+    # The uploaded file keeps this name, which is what recipients see as the
+    # link text, so use a fixed one and take the uniqueness from the folder.
+    image_path = os.path.join(mkdtemp(prefix="zt-paste-"), "image.png")
+
+    def failed(error: str) -> ValueError:
+        # A temporary file is only meaningful once an image lands in it.
+        rmtree(os.path.dirname(image_path), ignore_errors=True)
+        return ValueError(error)
+
+    if PLATFORM == "MacOS":
+        # The script writes the file itself, so the image bytes never pass
+        # through a pipe (osascript would mangle them as text).
+        process = subprocess.run(
+            ["osascript", "-", image_path],
+            input=MACOS_CLIPBOARD_SCRIPT.encode("utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if process.returncode != 0:
+            raise failed("no image in clipboard")
+    elif PLATFORM in CLIPBOARD_IMAGE_TOOLS:
+        # WSL runs a script that writes the file itself (and needs a Windows
+        # path); the Linux tools instead stream the PNG out for us to write.
+        script = (
+            WSL_CLIPBOARD_SCRIPT.format(path=image_path.replace("/", "\\")).encode()
+            if PLATFORM == "WSL"
+            else None
+        )
+        image_data = b""
+        tried_a_tool = False
+        for command in CLIPBOARD_IMAGE_TOOLS[PLATFORM]:
+            try:
+                process = subprocess.run(
+                    command,
+                    input=script,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                continue  # Tool absent; fall through to the next one.
+            tried_a_tool = True
+            if process.returncode == 0:
+                image_data = process.stdout
+                break
+        if not tried_a_tool:
+            tools = " or ".join(tool[0] for tool in CLIPBOARD_IMAGE_TOOLS[PLATFORM])
+            raise failed(f"{tools} is required to paste an image")
+        if PLATFORM == "Linux":
+            if not image_data:
+                raise failed("no image in clipboard")
+            with open(image_path, "wb") as image_file:
+                image_file.write(image_data)
+    else:
+        raise failed("Pasting an image is not supported on this platform")
+
+    if not os.path.exists(image_path) or os.path.getsize(image_path) == 0:
+        raise failed("no image in clipboard")
+
+    return image_path

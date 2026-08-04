@@ -151,10 +151,13 @@ unresolved such issues and report them there.
 
 ## Are there any themes available, other than the default one?
 
-Yes. There are five supported themes:
+Yes. There are eight supported themes:
 - `zt_dark` (alias: `default`)
+- `catppuccin_mocha`
 - `gruvbox_dark` (alias: `gruvbox`)
 - `gruvbox_light`
+- `nord`
+- `tokyo_night`
 - `zt_light` (alias: `light`)
 - `zt_blue` (alias: `blue`)
 
@@ -168,8 +171,19 @@ theme=<theme_name>
 ```
 (where _theme_name_ is the name of theme or its alias).
 
+You can also switch theme while the application is running, by pressing
+<kbd>T</kbd> and picking one from the list. That applies immediately and lasts
+for the session; `theme` in `zuliprc` still decides what the next run starts
+with.
+
 **NOTE** Theme aliases are likely to be deprecated in the future, so we
 recommend using the full theme names.
+
+**NOTE** Themes are rendered with 256 colors by default, which approximates
+those with a palette outside that range - `catppuccin_mocha`, `nord` and
+`tokyo_night` in particular. On a terminal with true color support, add
+`color-depth=24bit` to the `[zterm]` section (or pass `--color-depth 24bit`) to
+get the exact colors.
 
 ## How do links in messages work? What are footlinks?
 

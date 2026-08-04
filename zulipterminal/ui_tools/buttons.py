@@ -27,6 +27,7 @@ from zulipterminal.config.symbols import (
 )
 from zulipterminal.config.ui_mappings import EDIT_MODE_CAPTIONS, STREAM_ACCESS_TYPE
 from zulipterminal.helper import StreamData, hash_util_decode, process_media
+from zulipterminal.ui_tools.messages import unicode_emoji_from_code
 from zulipterminal.urwid_types import urwid_MarkupTuple, urwid_Size
 
 
@@ -267,8 +268,17 @@ class StreamButton(TopButton):
         self.view.home_button.update_count(self.model.unread_counts["all_msg"])
 
     def keypress(self, size: urwid_Size, key: str) -> Optional[str]:
+        if is_command_key("ACTIVATE_BUTTON", key):
+            # Narrow to the whole stream (all messages) and reveal its topics
+            # indented beneath it, keeping focus in the stream list so a topic
+            # can be picked next. Pressing it again collapses the topics.
+            self.controller.narrow_to_stream(stream_name=self.stream_name)
+            self.view.stream_w.toggle_topics(self)
+            return None
         if is_command_key("TOGGLE_TOPIC", key):
-            self.view.left_panel.show_topic_view(self)
+            # Expand/collapse this stream's topics inline, without narrowing.
+            self.view.stream_w.toggle_topics(self)
+            return None
         elif is_command_key("TOGGLE_MUTE_STREAM", key):
             self.controller.stream_muting_confirmation_popup(
                 self.stream_id, self.stream_name
@@ -437,6 +447,17 @@ class EmojiButton(TopButton):
         self.toggle_selection = toggle_selection
         self.emoji_name, self.emoji_code, self.aliases = emoji_unit
         full_button_label = ", ".join([self.emoji_name, *self.aliases])
+
+        # Prefix the actual glyph for unicode emojis so the picker shows the
+        # emoji, not just its name. Custom/realm and zulip-extra emojis have no
+        # unicode form, so they keep their :name: text only.
+        emoji_type = controller.model.active_emoji_data.get(self.emoji_name, {}).get(
+            "type"
+        )
+        if emoji_type == "unicode_emoji":
+            glyph = unicode_emoji_from_code(self.emoji_code)
+            if glyph:
+                full_button_label = f"{glyph}  {full_button_label}"
 
         super().__init__(
             controller=controller,
@@ -725,6 +746,29 @@ class MessageLinkButton(urwid.Button):
             # Exit pop-up if MessageLinkButton exists in one.
             if self.controller.is_any_popup_open():
                 self.controller.exit_popup()
+
+
+class ThemeButton(urwid.Button):
+    """
+    A color theme in the theme picker; activating it applies that theme for the
+    rest of the session.
+    """
+
+    def __init__(self, *, controller: Any, theme_name: str, is_active: bool) -> None:
+        self.controller = controller
+        self.theme_name = theme_name
+
+        super().__init__("")
+        caption = f" {CHECK_MARK if is_active else ' '} {theme_name} "
+        # Cursor position beyond the caption keeps the cursor out of sight
+        icon = urwid.SelectableIcon(caption, cursor_position=len(caption) + 1)
+        self._w = urwid.AttrMap(
+            icon, "popup_category" if is_active else None, focus_map="selected"
+        )
+        urwid.connect_signal(self, "click", self.apply_theme)
+
+    def apply_theme(self, *_: Any) -> None:
+        self.controller.set_theme(self.theme_name)
 
 
 class EditModeButton(urwid.Button):

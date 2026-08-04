@@ -17,6 +17,7 @@ from zulipterminal.config.keys import (
     display_key_for_urwid_key,
     display_keys_for_command,
     is_command_key,
+    primary_display_key_for_command,
     primary_key_for_command,
 )
 from zulipterminal.config.markdown_examples import MARKDOWN_ELEMENTS
@@ -34,6 +35,7 @@ from zulipterminal.config.ui_mappings import (
     STREAM_ACCESS_TYPE,
     STREAM_POST_POLICY,
 )
+from zulipterminal.config.themes import all_themes
 from zulipterminal.config.ui_sizes import LEFT_WIDTH
 from zulipterminal.helper import (
     TidiedUserInfo,
@@ -55,6 +57,7 @@ from zulipterminal.ui_tools.buttons import (
     PMButton,
     StarredButton,
     StreamButton,
+    ThemeButton,
     TopicButton,
     UserButton,
 )
@@ -337,6 +340,56 @@ class StreamsView(urwid.Frame):
         )
         self.search_lock = threading.Lock()
         self.empty_search = False
+        # Inline topic expansion: the stream whose topics are currently shown
+        # indented under it, and the topic-button widgets inserted for it.
+        self.expanded_stream_button: Optional[Any] = None
+        self.expanded_topic_buttons: List[Any] = []
+
+    def toggle_topics(self, stream_button: Any) -> None:
+        """
+        Show/hide the given stream's topics indented directly beneath it in the
+        stream list. Only one stream is expanded at a time.
+        """
+        if self.expanded_stream_button is stream_button:
+            self._collapse_topics()
+        else:
+            self._collapse_topics()
+            self._expand_topics(stream_button)
+
+    def _collapse_topics(self) -> None:
+        for topic_button in self.expanded_topic_buttons:
+            if topic_button in self.log:
+                self.log.remove(topic_button)
+        self.expanded_topic_buttons = []
+        self.expanded_stream_button = None
+
+    def _expand_topics(self, stream_button: Any) -> None:
+        if stream_button not in self.log:
+            return
+        stream_id = stream_button.stream_id
+        model = self.view.model
+        # Indent each topic (urwid.Padding) so it reads as nested under the
+        # stream; the TopicButton itself narrows to that topic when activated.
+        topic_buttons = [
+            urwid.Padding(
+                TopicButton(
+                    stream_id=stream_id,
+                    topic=topic,
+                    controller=self.view.controller,
+                    view=self.view,
+                    count=model.unread_counts["unread_topics"].get(
+                        (stream_id, topic), 0
+                    ),
+                ),
+                left=2,
+            )
+            for topic in model.topics_in_stream(stream_id)
+        ]
+        index = self.log.index(stream_button)
+        for offset, topic_button in enumerate(topic_buttons, start=1):
+            self.log.insert(index + offset, topic_button)
+        self.expanded_topic_buttons = topic_buttons
+        self.expanded_stream_button = stream_button
 
     @asynch
     def update_streams(self, search_box: Any, new_text: str) -> None:
@@ -345,6 +398,10 @@ class StreamsView(urwid.Frame):
         # wait for any previously started search to finish to avoid
         # displaying wrong stream list.
         with self.search_lock:
+            # Searching rebuilds the list from streams_btn_list, which never
+            # holds the inline topic buttons, so drop any expansion state.
+            self.expanded_stream_button = None
+            self.expanded_topic_buttons = []
             stream_buttons = [
                 (stream, stream.stream_name) for stream in self.streams_btn_list.copy()
             ]
@@ -401,6 +458,8 @@ class StreamsView(urwid.Frame):
             return key
         elif is_command_key("CLEAR_SEARCH", key):
             self.stream_search_box.reset_search_text()
+            self.expanded_stream_button = None
+            self.expanded_topic_buttons = []
             self.log.clear()
             self.log.extend(self.streams_btn_list)
             self.set_focus("body")
@@ -1309,6 +1368,14 @@ class HelpView(PopUpView):
                         "@attach:~/report.pdf",
                     ),
                     (
+                        "Candidate paths preview in the footer as you type",
+                        "@attach:~/Doc",
+                    ),
+                    (
+                        "Complete/cycle the path (directories end in /)",
+                        primary_display_key_for_command("AUTOCOMPLETE"),
+                    ),
+                    (
                         "Attach several files, one token per line",
                         "@attach:<path>",
                     ),
@@ -1347,7 +1414,133 @@ class HelpView(PopUpView):
         )
         widgets = self.make_table_with_categories(help_menu_content, column_widths)
 
-        super().__init__(controller, widgets, "HELP", popup_width, title)
+        # Fork feature: live search/filter of the help entries, so a binding can
+        # be found by name/keys instead of scrolling the whole list. Reuses the
+        # global search key ('/', SEARCH_MESSAGES) rather than adding a separate
+        # binding (which would duplicate '/' within the "Searching" help
+        # category). PanelSearchBox reaches the controller via
+        # panel_view.view.controller.
+        self.view = controller.view
+        self.help_menu_content = help_menu_content
+        self.column_widths = column_widths
+        self.empty_search = False
+        self.search_lock = threading.Lock()
+        self.help_search = PanelSearchBox(
+            self, "SEARCH_MESSAGES", self.update_help_list
+        )
+        header = urwid.Pile(
+            [self.help_search, urwid.Divider(SECTION_DIVIDER_LINE)]
+        )
+
+        super().__init__(
+            controller, widgets, "HELP", popup_width, title, header=header
+        )
+
+    @asynch
+    def update_help_list(
+        self, search_box: Any = None, new_text: Optional[str] = None
+    ) -> None:
+        """
+        Filter the help entries in real-time via PanelSearchBox, matching the
+        search text against each binding's description and its keys.
+        """
+        # The "change" signal can fire during construction, before help_search
+        # is assigned; ignore it until the search box exists.
+        if not hasattr(self, "help_search"):
+            return
+        with self.search_lock:
+            if new_text and new_text != self.help_search.search_text:
+                query = new_text.lower()
+                filtered_content = []
+                for category, rows in self.help_menu_content:
+                    matched = [
+                        row
+                        for row in rows
+                        if query
+                        in (" ".join(row) if isinstance(row, tuple) else row).lower()
+                    ]
+                    if matched:
+                        filtered_content.append((category, matched))
+            else:
+                filtered_content = self.help_menu_content
+
+            self.empty_search = len(filtered_content) == 0
+            if self.empty_search:
+                body_widgets = [self.help_search.search_error]
+            else:
+                body_widgets = self.make_table_with_categories(
+                    filtered_content, self.column_widths
+                )
+            self.contents["body"] = (
+                urwid.ListBox(urwid.SimpleFocusListWalker(body_widgets)),
+                None,
+            )
+            self.controller.update_screen()
+
+    def keypress(self, size: urwid_Size, key: str) -> Optional[str]:
+        if (
+            is_command_key("SEARCH_MESSAGES", key)
+            and not self.controller.is_in_editor_mode()
+        ):
+            self.set_focus("header")
+            self.help_search.set_caption(" ")
+            self.controller.enter_editor_mode_with(self.help_search)
+            return key
+        if is_command_key("EXIT_POPUP", key) or (
+            is_command_key("HELP", key) and not self.controller.is_in_editor_mode()
+        ):
+            self.help_search.reset_search_text()
+            self.controller.exit_editor_mode()
+            self.controller.exit_popup()
+            return key
+        return super().keypress(size, key)
+
+
+class ThemePickerView(PopUpView):
+    """
+    Fork feature: switch the color theme without restarting.
+
+    The theme is applied as soon as an entry is activated and the popup stays
+    open, so themes can be compared against the messages behind it; EXIT_POPUP
+    (or SWITCH_THEME again) closes it, keeping whatever is applied. The choice
+    lasts for the session only - `theme` in zuliprc still decides what the next
+    run starts with.
+    """
+
+    def __init__(self, controller: Any, title: str) -> None:
+        self.controller = controller
+        self.theme_names = all_themes()
+
+        # ' <mark> <name> ' plus a little breathing room around the longest name
+        width = max(len(name) for name in self.theme_names) + 6
+        super().__init__(
+            controller,
+            self.theme_buttons(),
+            "SWITCH_THEME",
+            max(width, len(title)),
+            title,
+        )
+
+    def theme_buttons(self) -> List[Any]:
+        return [
+            ThemeButton(
+                controller=self.controller,
+                theme_name=name,
+                is_active=(name == self.controller.theme_name),
+            )
+            for name in self.theme_names
+        ]
+
+    def keypress(self, size: urwid_Size, key: str) -> str:
+        if is_command_key("ACTIVATE_BUTTON", key):
+            # Applying a theme moves the active marker, so rebuild the list;
+            # keep the focus where it is, ready to try the next one.
+            focus_position = self.body.focus_position
+            key = super().keypress(size, key)
+            self.log[:] = self.theme_buttons()
+            self.body.set_focus(focus_position)
+            return key
+        return super().keypress(size, key)
 
 
 class MarkdownHelpView(PopUpView):

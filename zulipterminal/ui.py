@@ -331,6 +331,12 @@ class View(urwid.WidgetWrap):
         elif is_command_key("NEW_HINT", key):
             self.set_footer_text()
             return key
+        elif is_command_key("RESTART", key):
+            self.controller.restart()
+            return key
+        elif is_command_key("SWITCH_THEME", key):
+            self.controller.show_theme_picker()
+            return key
         return super().keypress(size, key)
 
     def mouse_event(
