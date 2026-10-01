@@ -2289,6 +2289,10 @@ class FullRawMsgView(PopUpView):
 class EmojiPickerView(PopUpView):
     """
     Displays Emoji Picker view for messages.
+
+    Picking an emoji toggles that reaction on the message straight away and
+    closes the picker; EXIT_POPUP (or ADD_REACTION again) closes it without
+    reacting.
     """
 
     def __init__(
@@ -2302,7 +2306,6 @@ class EmojiPickerView(PopUpView):
         self.view = view
         self.message = message
         self.controller = controller
-        self.selected_emojis: Dict[str, str] = {}
         self.emoji_buttons = self.generate_emoji_buttons(emoji_units)
         width = max(len(button.label) for button in self.emoji_buttons)
         max_cols, max_rows = controller.maximum_popup_dimensions()
@@ -2371,14 +2374,18 @@ class EmojiPickerView(PopUpView):
             )
             self.controller.update_screen()
 
-    def is_selected_emoji(self, emoji_name: str) -> bool:
-        return emoji_name in self.selected_emojis.values()
+    def toggle_reaction(self, emoji_name: str) -> None:
+        """
+        React to the message with the picked emoji (or take that reaction
+        back, if it is already ours), and close the picker.
+        """
+        self.controller.model.toggle_message_reaction(self.message, emoji_name)
+        self.exit_picker()
 
-    def add_or_remove_selected_emoji(self, emoji_code: str, emoji_name: str) -> None:
-        if emoji_name in self.selected_emojis.values():
-            self.selected_emojis.pop(emoji_code, None)
-        else:
-            self.selected_emojis.update({emoji_code: emoji_name})
+    def exit_picker(self) -> None:
+        self.emoji_search.reset_search_text()
+        self.controller.exit_editor_mode()
+        self.controller.exit_popup()
 
     def count_reactions(self, emoji_code: str) -> int:
         num_reacts = 0
@@ -2396,8 +2403,7 @@ class EmojiPickerView(PopUpView):
                 emoji_unit=emoji_unit,
                 message=self.message,
                 reaction_count=self.count_reactions(emoji_unit[1]),
-                is_selected=self.is_selected_emoji,
-                toggle_selection=self.add_or_remove_selected_emoji,
+                toggle_reaction=self.toggle_reaction,
             )
             for emoji_unit in emoji_units
         ]
@@ -2411,7 +2417,17 @@ class EmojiPickerView(PopUpView):
     ) -> bool:
         if event == "mouse press":
             if button == 1 and self.controller.is_in_editor_mode():
-                super().keypress(size, "enter")
+                # Let the click through first: on an emoji it picks that emoji
+                # (closing the picker), rather than only moving from the search
+                # box to the list as EXECUTE_SEARCH does.
+                super().mouse_event(size, event, button, col, row, focus)
+                if self.controller.is_in_editor_mode():
+                    # No emoji was clicked, so just leave the search box. The
+                    # click may have focused the list, where this key would
+                    # pick whichever emoji has the focus, so return the focus
+                    # to the search box for it.
+                    self.set_focus("header")
+                    super().keypress(size, "enter")
                 return True
             if button == 4:
                 self.keypress(size, "up")
@@ -2431,10 +2447,6 @@ class EmojiPickerView(PopUpView):
             self.controller.enter_editor_mode_with(self.emoji_search)
             return key
         elif is_command_key("EXIT_POPUP", key) or is_command_key("ADD_REACTION", key):
-            for emoji_code, emoji_name in self.selected_emojis.items():
-                self.controller.model.toggle_message_reaction(self.message, emoji_name)
-            self.emoji_search.reset_search_text()
-            self.controller.exit_editor_mode()
-            self.controller.exit_popup()
+            self.exit_picker()
             return key
         return super().keypress(size, key)

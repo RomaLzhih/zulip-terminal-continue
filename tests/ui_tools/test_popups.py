@@ -5,10 +5,14 @@ from unittest.mock import patch
 import pytest
 from pytest import param as case
 from pytest_mock import MockerFixture
-from urwid import Columns, Pile, Text, Widget
+from urwid import Columns, Pile, SimpleFocusListWalker, Text, Widget
 
 from zulipterminal.api_types import Message
-from zulipterminal.config.keys import is_command_key, keys_for_command
+from zulipterminal.config.keys import (
+    is_command_key,
+    keys_for_command,
+    primary_key_for_command,
+)
 from zulipterminal.config.symbols import CHECK_MARK
 from zulipterminal.config.themes import all_themes
 from zulipterminal.config.ui_mappings import EDIT_MODE_CAPTIONS
@@ -1874,3 +1878,105 @@ class TestEmojiPickerView:
         self.emoji_picker_view.keypress(size, key)
 
         assert self.controller.exit_popup.called
+        self.controller.model.toggle_message_reaction.assert_not_called()
+
+    @pytest.fixture
+    def emoji_picker(
+        self, mocker: MockerFixture, message_fixture: Message
+    ) -> EmojiPickerView:
+        """
+        A picker holding a real list of emojis to pick from (smile, tada and
+        zulip, in that order), opened by a controller which keeps track of
+        editor mode as the real one does.
+        """
+        mocker.patch(LISTWALKER, SimpleFocusListWalker)
+        editor: List[Any] = []
+        self.controller.is_in_editor_mode.side_effect = lambda: bool(editor)
+        self.controller.enter_editor_mode_with.side_effect = editor.append
+        self.controller.exit_editor_mode.side_effect = editor.clear
+        self.view.controller = self.controller
+        message_fixture["reactions"] = []
+        return EmojiPickerView(
+            self.controller,
+            "ADD EMOJI",
+            [("smile", "1f604", []), ("tada", "1f389", []), ("zulip", "zulip", [])],
+            message_fixture,
+            self.view,
+        )
+
+    @pytest.mark.parametrize("key", keys_for_command("ACTIVATE_BUTTON"))
+    def test_keypress_ACTIVATE_BUTTON_reacts_and_exits(
+        self,
+        key: str,
+        emoji_picker: EmojiPickerView,
+        message_fixture: Message,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        size = widget_size(emoji_picker)
+        # Search for an emoji, then move from the search box to the results
+        for search_key in [*"tad", primary_key_for_command("EXECUTE_SEARCH")]:
+            emoji_picker.keypress(size, search_key)
+        self.controller.model.toggle_message_reaction.assert_not_called()
+
+        emoji_picker.keypress(size, key)
+
+        # Picking is all it takes: the reaction is not held back until the
+        # picker is closed by hand, and the picker closes by itself.
+        self.controller.model.toggle_message_reaction.assert_called_once_with(
+            message_fixture, "tada"
+        )
+        assert self.controller.exit_popup.called
+        assert not self.controller.is_in_editor_mode()
+
+    def test_keypress_exit_after_browsing_does_not_react(
+        self,
+        emoji_picker: EmojiPickerView,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        size = widget_size(emoji_picker)
+        for key in [
+            primary_key_for_command("EXECUTE_SEARCH"),
+            primary_key_for_command("GO_DOWN"),
+            primary_key_for_command("EXIT_POPUP"),
+        ]:
+            emoji_picker.keypress(size, key)
+
+        assert self.controller.exit_popup.called
+        self.controller.model.toggle_message_reaction.assert_not_called()
+
+    def test_mouse_event_left_click_on_emoji_reacts_and_exits(
+        self,
+        emoji_picker: EmojiPickerView,
+        message_fixture: Message,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        size = widget_size(emoji_picker)
+        # The picker opens in its search box; a click on an emoji picks that
+        # emoji from there, without a first click only to reach the list.
+        assert self.controller.is_in_editor_mode()
+        tada_row = 3  # below the search box, its divider, and 'smile'
+
+        emoji_picker.mouse_event(size, "mouse press", 1, 4, tada_row, True)
+
+        self.controller.model.toggle_message_reaction.assert_called_once_with(
+            message_fixture, "tada"
+        )
+        assert self.controller.exit_popup.called
+        assert not self.controller.is_in_editor_mode()
+
+    def test_mouse_event_left_click_off_emojis_only_leaves_search(
+        self,
+        emoji_picker: EmojiPickerView,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        size = widget_size(emoji_picker)
+        assert self.controller.is_in_editor_mode()
+        empty_row = size[1] - 1  # the list of three emojis ends well above this
+
+        emoji_picker.mouse_event(size, "mouse press", 1, 4, empty_row, True)
+
+        # In particular, the emoji which has the focus is not picked
+        self.controller.model.toggle_message_reaction.assert_not_called()
+        assert not self.controller.exit_popup.called
+        assert not self.controller.is_in_editor_mode()
+        assert emoji_picker.get_focus() == "body"

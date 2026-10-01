@@ -346,6 +346,41 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   `test_show_theme_picker`), `tests/ui/test_ui.py`
   (`test_keypress_SWITCH_THEME`), `tests/ui_tools/test_popups.py:
   TestThemePickerView`, and `tests/ui_tools/test_buttons.py: TestThemeButton`.
+- `ui_tools/views.py: EmojiPickerView.toggle_reaction` / `exit_picker` +
+  `ui_tools/buttons.py: EmojiButton.pick_emoji` — picking an emoji in the
+  reaction picker (`:`) **reacts straight away and closes the picker**.
+  Upstream's picker is a deferred multi-select: `ACTIVATE_BUTTON` (or a click)
+  only ticked the entry (`selected_emojis`), and nothing was sent until the
+  popup was closed by hand with `EXIT_POPUP` / `ADD_REACTION` — so picking
+  looked like it did nothing: no reaction in the chat, picker still open. Now
+  activating an entry calls `Model.toggle_message_reaction` at once (adding the
+  reaction, or taking it back if it is already ours — those entries are still
+  ticked and sorted first) and closes the popup; `esc` / `:` close it without
+  reacting. The selection bookkeeping (`selected_emojis`, `is_selected_emoji`,
+  `add_or_remove_selected_emoji`, `EmojiButton.update_emoji_button` and its
+  count arithmetic) is gone; the button takes one `toggle_reaction` callback.
+  **Mouse**: the picker opens in its search box, where upstream turned a left
+  click anywhere into `EXECUTE_SEARCH` — the first click on an emoji only moved
+  to the list, and a second was needed. `EmojiPickerView.mouse_event` now
+  delivers the click first, and falls back to leaving the search box only if no
+  emoji was hit (ie. still in editor mode). Two things about that order are
+  deliberate. The fallback must `set_focus("header")` before sending its
+  `enter`: urwid's `Frame.mouse_event` has by then focused the list, where
+  `enter` would pick whichever emoji has the focus. And the click goes in
+  *before* the search box is left, because leaving an empty search box (as it
+  is when the picker opens) rebuilds the list in an `@asynch` thread
+  (`PanelSearchBox.reset_search_text` always emits `change`; urwid's
+  `Edit.set_edit_text` does so even for unchanged text), and a click delivered
+  afterwards could land on a list which is being replaced.
+  Tested in `tests/ui_tools/test_popups.py::TestEmojiPickerView`
+  (`test_keypress_ACTIVATE_BUTTON_reacts_and_exits`,
+  `test_keypress_exit_after_browsing_does_not_react`,
+  `test_mouse_event_left_click_on_emoji_reacts_and_exits`,
+  `test_mouse_event_left_click_off_emojis_only_leaves_search`) against a real
+  list of buttons — the class's autouse fixture mocks the list walker out, so
+  the `emoji_picker` fixture patches the real one back in — and in
+  `tests/ui_tools/test_buttons.py::TestEmojiButton`
+  (`test_keypress_emoji_button`, `test_mouse_event`).
 
 ## Testing
 

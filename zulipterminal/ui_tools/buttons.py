@@ -437,14 +437,12 @@ class EmojiButton(TopButton):
         emoji_unit: Tuple[str, str, List[str]],  # (emoji_name, emoji_code, aliases)
         message: Message,
         reaction_count: int = 0,
-        is_selected: Callable[[str], bool],
-        toggle_selection: Callable[[str, str], None],
+        toggle_reaction: Callable[[str], None],
     ) -> None:
         self.controller = controller
         self.message = message
-        self.is_selected = is_selected
         self.reaction_count = reaction_count
-        self.toggle_selection = toggle_selection
+        self.toggle_reaction = toggle_reaction
         self.emoji_name, self.emoji_code, self.aliases = emoji_unit
         full_button_label = ", ".join([self.emoji_name, *self.aliases])
 
@@ -462,11 +460,10 @@ class EmojiButton(TopButton):
         super().__init__(
             controller=controller,
             label_markup=(None, full_button_label),
-            show_function=self.update_emoji_button,
+            show_function=self.pick_emoji,
         )
 
-        has_check_mark = self._has_user_reacted_to_msg() or is_selected(self.emoji_name)
-        self.update_check_mark(has_check_mark)
+        self.update_check_mark(self._has_user_reacted_to_msg())
 
     def _has_user_reacted_to_msg(self) -> bool:
         return self.controller.model.has_user_reacted_to_message(
@@ -487,17 +484,8 @@ class EmojiButton(TopButton):
             return True
         return super().mouse_event(size, event, button, col, row, focus)
 
-    def update_emoji_button(self) -> None:
-        self.toggle_selection(self.emoji_code, self.emoji_name)
-        is_reaction_added = self._has_user_reacted_to_msg() != self.is_selected(
-            self.emoji_name
-        )
-        self.reaction_count = (
-            (self.reaction_count + 1)
-            if is_reaction_added
-            else (self.reaction_count - 1)
-        )
-        self.update_check_mark(is_reaction_added)
+    def pick_emoji(self) -> None:
+        self.toggle_reaction(self.emoji_name)
 
 
 class DecodedStream(TypedDict):

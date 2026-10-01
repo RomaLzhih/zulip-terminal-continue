@@ -448,14 +448,13 @@ class TestEmojiButton:
             emoji_unit=emoji_unit,
             message=message_fixture,
             reaction_count=count,
-            is_selected=lambda *_: False,
-            toggle_selection=lambda *_: None,
+            toggle_reaction=lambda *_: None,
         )
 
         top_button.assert_called_once_with(
             controller=controller,
             label_markup=(None, label),
-            show_function=emoji_button.update_emoji_button,
+            show_function=emoji_button.pick_emoji,
         )
         assert emoji_button.emoji_name == emoji_unit[0]
         assert emoji_button.reaction_count == count
@@ -477,14 +476,13 @@ class TestEmojiButton:
             emoji_unit=("+1", "1f44d", ["thumbs_up"]),
             message=message_fixture,
             reaction_count=0,
-            is_selected=lambda *_: False,
-            toggle_selection=lambda *_: None,
+            toggle_reaction=lambda *_: None,
         )
 
         top_button.assert_called_once_with(
             controller=controller,
             label_markup=(None, chr(0x1F44D) + "  +1, thumbs_up"),
-            show_function=emoji_button.update_emoji_button,
+            show_function=emoji_button.pick_emoji,
         )
 
     def test_init_realm_emoji_keeps_text(
@@ -506,71 +504,99 @@ class TestEmojiButton:
             emoji_unit=("octopus", "123", []),
             message=message_fixture,
             reaction_count=0,
-            is_selected=lambda *_: False,
-            toggle_selection=lambda *_: None,
+            toggle_reaction=lambda *_: None,
         )
 
         top_button.assert_called_once_with(
             controller=controller,
             label_markup=(None, "octopus"),
-            show_function=emoji_button.update_emoji_button,
+            show_function=emoji_button.pick_emoji,
         )
+
+    @pytest.fixture
+    def emoji_button_factory(
+        self, mocker: MockerFixture, message_fixture: Message
+    ) -> Callable[..., EmojiButton]:
+        def factory(
+            emoji: Tuple[str, str, List[str]], *, has_user_reacted: bool
+        ) -> EmojiButton:
+            controller = mocker.Mock()
+            controller.model.has_user_reacted_to_message = mocker.Mock(
+                return_value=has_user_reacted
+            )
+            message_fixture.update(
+                {
+                    "reactions": [
+                        {"emoji_name": "smile", "user": [{"id": 10}]},
+                        {"emoji_name": "+1", "user": [{"id": 52}]},
+                    ],
+                }
+            )
+            return EmojiButton(
+                controller=controller,
+                emoji_unit=emoji,
+                message=message_fixture,
+                reaction_count=1,
+                toggle_reaction=mocker.Mock(),
+            )
+
+        return factory
 
     @pytest.mark.parametrize("key", keys_for_command("ACTIVATE_BUTTON"))
     @pytest.mark.parametrize(
-        "emoji, has_user_reacted, is_selected_final, expected_reaction_count",
+        "emoji, has_user_reacted",
         [
-            case(("smile", "1f642", []), True, False, 2, id="reacted_unselected_emoji"),
-            case(("smile", "1f642", []), True, True, 0, id="reacted_selected_emoji"),
-            case(("+1", "1f44d", []), False, False, 0, id="unreacted_unselected_emoji"),
-            case(("+1", "1f44d", []), False, True, 2, id="unreacted_selected_emoji"),
+            case(("smile", "1f604", []), True, id="reacted_emoji"),
+            case(("+1", "1f44d", []), False, id="unreacted_emoji"),
         ],
     )
     def test_keypress_emoji_button(
         self,
-        mocker: MockerFixture,
         key: str,
         emoji: Tuple[str, str, List[str]],
         has_user_reacted: bool,
-        is_selected_final: bool,
         widget_size: Callable[[Widget], urwid_Size],
-        message_fixture: Message,
-        expected_reaction_count: int,
+        emoji_button_factory: Callable[..., EmojiButton],
     ) -> None:
-        controller = mocker.Mock()
-        controller.model.has_user_reacted_to_message = mocker.Mock(
-            return_value=has_user_reacted
-        )
-        message_fixture.update(
-            {
-                "reactions": [
-                    {"emoji_name": "smile", "user": [{"id": 10}]},
-                    {"emoji_name": "+1", "user": [{"id": 52}]},
-                ],
-            }
-        )
-        emoji_button = EmojiButton(
-            controller=controller,
-            emoji_unit=emoji,
-            message=message_fixture,
-            reaction_count=1,
-            is_selected=lambda *_: is_selected_final,
-            toggle_selection=lambda *_: None,
-        )
+        emoji_button = emoji_button_factory(emoji, has_user_reacted=has_user_reacted)
         size = widget_size(emoji_button)
 
         emoji_button.keypress(size, key)
 
-        reaction_count = emoji_button.reaction_count
-        reaction_count_text = "" if reaction_count == 0 else f"{reaction_count}"
-        suffix_text = (
-            f"{CHECK_MARK} " + reaction_count_text
-            if has_user_reacted != is_selected_final
-            else reaction_count_text
-        )
+        # Picking an emoji hands it over to be reacted with there and then.
+        # The button only ever shows the reactions already on the message, as
+        # the picker closes rather than waiting to show the outcome.
+        emoji_button.toggle_reaction.assert_called_once_with(emoji[0])
+        suffix_text = f"{CHECK_MARK} 1" if has_user_reacted else "1"
         assert emoji_button.emoji_name == emoji[0]
-        assert reaction_count == expected_reaction_count
+        assert emoji_button.reaction_count == 1
         assert emoji_button.button_suffix.get_text()[0].strip() == suffix_text
+
+    @pytest.mark.parametrize(
+        "event, button, picks_emoji",
+        [
+            case("mouse press", 1, True, id="left_click"),
+            case("mouse press", 3, False, id="right_click"),
+            case("mouse release", 1, False, id="left_button_release"),
+        ],
+    )
+    def test_mouse_event(
+        self,
+        event: str,
+        button: int,
+        picks_emoji: bool,
+        widget_size: Callable[[Widget], urwid_Size],
+        emoji_button_factory: Callable[..., EmojiButton],
+    ) -> None:
+        emoji_button = emoji_button_factory(("+1", "1f44d", []), has_user_reacted=False)
+        size = widget_size(emoji_button)
+
+        emoji_button.mouse_event(size, event, button, 0, 0, True)
+
+        if picks_emoji:
+            emoji_button.toggle_reaction.assert_called_once_with("+1")
+        else:
+            emoji_button.toggle_reaction.assert_not_called()
 
 
 class TestTopicButton:
