@@ -16,6 +16,7 @@ from zulipterminal.config.keys import (
 from zulipterminal.config.symbols import CHECK_MARK
 from zulipterminal.config.themes import all_themes
 from zulipterminal.config.ui_mappings import EDIT_MODE_CAPTIONS
+from zulipterminal.config.ui_sizes import MAX_EMOJI_PICKER_WIDTH
 from zulipterminal.helper import CustomProfileData, TidiedUserInfo
 from zulipterminal.ui_tools.messages import MessageBox
 from zulipterminal.ui_tools.views import (
@@ -1834,6 +1835,23 @@ class TestEmojiPickerView:
 
         assert emojis_display_name == assert_list
         assert self.emoji_picker_view.get_focus() == "header"
+
+    def test_init_width_not_stretched_by_many_aliases(
+        self, message_fixture: Message
+    ) -> None:
+        self.controller.maximum_popup_dimensions.return_value = (200, 64)
+        many_aliases = [f"alias_{number}" for number in range(30)]
+
+        emoji_picker = EmojiPickerView(
+            self.controller,
+            "ADD EMOJI",
+            [("phoenix", "1f426-200d-1f525", many_aliases)],
+            message_fixture,
+            self.view,
+        )
+
+        assert len(emoji_picker.emoji_buttons[0].label) > MAX_EMOJI_PICKER_WIDTH
+        assert emoji_picker.width == MAX_EMOJI_PICKER_WIDTH
 
     @pytest.mark.parametrize(
         "event, button, keypress",

@@ -381,6 +381,29 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   the `emoji_picker` fixture patches the real one back in — and in
   `tests/ui_tools/test_buttons.py::TestEmojiButton`
   (`test_keypress_emoji_button`, `test_mouse_event`).
+- `unicode_emojis.py` — **regenerated** from the server's emoji table, with
+  `tools/fetch-unicode-emoji-data` then `tools/convert-unicode-emoji-data`; it
+  had last been synced in March 2023. This is not cosmetic: the reaction API
+  takes an emoji's *name and code together*, and the server refuses a pair
+  which does not match its own table (`zerver/lib/emoji.py:
+  check_emoji_request`), unless someone has already reacted with that code. So
+  a stale table breaks reactions one emoji at a time — `smile` was still
+  `1f642` here, but was remapped to `1f604` server-side in April 2025
+  (zulip/zulip `9feba0f16f`; `1f642` became `slight_smile`), and reacting with
+  it only flashed "Invalid emoji name." in the footer for 3 seconds. Compared
+  with the table at the commit the server runs (`GET /api/v1/server_settings`
+  gives `zulip_merge_base`), 13 picker entries were refused (`smile`,
+  `big_smile`, `flag_turkey`, and ten ZWJ sequences whose codes have dropped
+  their `fe0f`), 133 aliases no longer existed and 60 emoji were missing.
+  **If a reaction is refused with "Invalid emoji name/code.", re-run those two
+  tools.** Message bodies and existing reactions were never affected, as they
+  are rendered from what the server sends.
+  The newer table has entries with a dozen aliases (the longest label grew
+  from 76 to 130 characters), and the picker is sized by its longest label, so
+  it would have stretched to the maximum popup width; `config/ui_sizes.py:
+  MAX_EMOJI_PICKER_WIDTH` caps it at about the width it had, the 12 longer
+  labels being cut short with an ellipsis by `TopButton`. Tested by
+  `test_init_width_not_stretched_by_many_aliases`.
 
 ## Testing
 

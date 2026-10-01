@@ -36,7 +36,7 @@ from zulipterminal.config.ui_mappings import (
     STREAM_POST_POLICY,
 )
 from zulipterminal.config.themes import all_themes
-from zulipterminal.config.ui_sizes import LEFT_WIDTH
+from zulipterminal.config.ui_sizes import LEFT_WIDTH, MAX_EMOJI_PICKER_WIDTH
 from zulipterminal.helper import (
     TidiedUserInfo,
     asynch,
@@ -2309,7 +2309,8 @@ class EmojiPickerView(PopUpView):
         self.emoji_buttons = self.generate_emoji_buttons(emoji_units)
         width = max(len(button.label) for button in self.emoji_buttons)
         max_cols, max_rows = controller.maximum_popup_dimensions()
-        popup_width = min(max_cols, width)
+        # Longer entries are shortened with an ellipsis by their buttons
+        popup_width = min(max_cols, width, MAX_EMOJI_PICKER_WIDTH)
         self.emoji_search = PanelSearchBox(
             self, "SEARCH_EMOJIS", self.update_emoji_list
         )
