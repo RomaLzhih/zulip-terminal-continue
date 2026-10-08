@@ -12,6 +12,7 @@ Zulip Terminal uses [Zulip's API](https://zulip.com/api/) to store and retrieve 
 |                        | helper.py           | Helper functions used in multiple places                                                |
 |                        | model.py            | Defines the `Model`, fetching and storing data retrieved from the Zulip server          |
 |                        | platform_code.py    | Detection of supported platforms & platform-specific functions                          |
+|                        | saved_state.py      | State saved by the application, to carry over into the next run                         |
 |                        | server_url.py       | Constructs and encodes server_url of messages.                                          |
 |                        | ui.py               | Defines the `View`, and controls where each component is displayed                      |
 |                        | unicode_emojis.py   | Unicode emoji data, synchronized semi-regularly with the server source                  |

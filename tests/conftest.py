@@ -1,6 +1,8 @@
 from collections import OrderedDict, defaultdict
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from uuid import uuid4
 
 import pytest
 from pytest_mock import MockerFixture
@@ -50,6 +52,20 @@ def no_asynch(mocker: MockerFixture) -> None:
     Make all function calls synchronous.
     """
     mocker.patch("zulipterminal.helper.asynch")
+
+
+@pytest.fixture(autouse=True)
+def state_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> Path:
+    """
+    Gives each test a place of its own for saved state, with nothing saved yet,
+    keeping all the tests away from what the user's own runs have saved.
+    """
+    # Not created here, as few tests save any state
+    state_home = tmp_path_factory.getbasetemp() / "state_home" / uuid4().hex
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    return state_home
 
 
 # --------------- Controller Fixtures -----------------------------------------

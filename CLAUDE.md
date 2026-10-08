@@ -303,7 +303,9 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   **~/zuliprc now sets `theme=catppuccin_mocha` and `color-depth=24bit`** (the
   default 256-color depth washes this palette out; tmux reports `RGB` in
   `client_termfeatures` here, so true color works). Backup at
-  `~/zuliprc.bak-before-catppuccin`. Registered in
+  `~/zuliprc.bak-before-catppuccin`. (That is the theme zuliprc *asks for*; a
+  theme picked with `T` since then is what runs - see `saved_state.py` below.)
+  Registered in
   `tests/config/test_themes.py: expected_complete_themes`, which enforces style
   completeness and color-code validity.
 - `themes/nord.py` + `themes/colors_nord.py`, `themes/tokyo_night.py` +
@@ -334,8 +336,8 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   opens a picker that **switches theme without restarting**. The theme applies
   the moment an entry is activated and the popup stays open (the active marker
   moves, focus is kept), so themes can be compared against the messages behind
-  it; `esc`/`T` closes, keeping whatever is applied. Session-only by design —
-  `theme` in zuliprc still decides what the next run starts with. It works
+  it; `esc`/`T` closes, keeping whatever is applied. The pick is remembered
+  for the next run too (see `saved_state.py`, the next entry). It works
   because urwid canvases store style *names*, not escape sequences:
   `screen.register_palette()` rebuilds `raw_display.Screen._pal_escape`, which
   `draw_screen` consults per cell, so no widget needs rebuilding. The catch is
@@ -346,6 +348,50 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   `test_show_theme_picker`), `tests/ui/test_ui.py`
   (`test_keypress_SWITCH_THEME`), `tests/ui_tools/test_popups.py:
   TestThemePickerView`, and `tests/ui_tools/test_buttons.py: TestThemeButton`.
+  **Known gap, not fixed:** each stream's color is a pair of palette styles
+  (`#abc` / `s#abc`) which `StreamButton.__init__` appends to `view.palette`
+  with the theme's *background* baked in, and `set_theme` re-registers only the
+  theme's own styles. So after a switch the stream markers in the left panel
+  (and the text of stream headers) keep the previous theme's background until
+  the next start - glaring between a light and a dark theme, subtle between two
+  dark ones. A restart (`ctrl x`) now cures it, since the theme is remembered.
+- `saved_state.py: load_picked_theme` / `save_picked_theme` + `cli/run.py: main`
+  + `core.py: Controller.set_theme` — the theme picked with `T` is **remembered
+  for the next run** (a relaunch, or `ctrl x`), instead of every start going
+  back to `theme` in zuliprc. `set_theme` saves each pick as it is applied (not
+  at exit: there are several ways out, `os.execv` among them); `main` starts
+  with it, and says so in the startup banner: `theme 'nord' specified in the
+  theme picker.` (`ConfigSource.THEME_PICKER`).
+  It is kept in a state file, `$XDG_STATE_HOME/zulip-terminal/state.json`
+  (`~/.local/state/...` unless set - on MacOS too, where `gh`, `nvim` etc.
+  keep theirs), **not written back into zuliprc**: that file is hand-written
+  with comments, holds the API key, and is what a dotfile manager would track,
+  so rewriting it on each pick is a poor trade for remembering a theme. The
+  file holds one entry per zuliprc (by real path), as the setting is per file.
+  The rule is that **the most recent choice of theme wins**: `--theme` > the
+  picked theme > `theme` in zuliprc > the default. Putting a remembered pick
+  above zuliprc would by itself make that setting dead after the first pick,
+  so each entry also records what `theme` was in zuliprc when it was picked
+  (`zuliprc_theme_when_picked`, `null` if unset); if that has changed since,
+  zuliprc takes over again and the pick is *forgotten*, not only skipped - or
+  it would come back when the edit was undone. `main` loads the pick even when
+  `--theme` is given, for the same reason. Both functions read `theme` from
+  zuliprc themselves (`_zuliprc_theme`), so the comparison is always between
+  two values read the same way. Editing any other zuliprc setting changes
+  nothing. A picked theme which no longer exists is passed over rather than
+  being an error, so a stale state file cannot stop a start.
+  The file is replaced in one step (`os.replace` of a temporary file), so a
+  second running instance never reads half of one and saves that back. A save
+  which fails (`OSError`) only shows a footer warning; the theme still applies.
+  **Tests must never touch the real state:** `tests/conftest.py: state_home`
+  is an autouse fixture pointing `XDG_STATE_HOME` at a place of its own for
+  every test (not created unless written to - asking for `tmp_path` in an
+  autouse fixture costs a directory scan per test). Set `XDG_STATE_HOME` in
+  the e2e harness as well. Tested in `tests/saved_state/test_saved_state.py`,
+  `tests/cli/test_run.py` (`test_main_theme_from_theme_picker`,
+  `test_main_theme_from_zuliprc_if_changed_since_theme_was_picked`,
+  `test_main_forgets_picked_theme_if_zuliprc_changed_even_with_theme_option`)
+  and `tests/core/test_core.py` (`test_set_theme`, `test_set_theme__not_saved`).
 - `ui_tools/views.py: EmojiPickerView.toggle_reaction` / `exit_picker` +
   `ui_tools/buttons.py: EmojiButton.pick_emoji` — picking an emoji in the
   reaction picker (`:`) **reacts straight away and closes the picker**.

@@ -13,7 +13,7 @@
 |Redraw screen|<kbd>Ctrl</kbd> + <kbd>l</kbd>|
 |Quit, or close the compose box if composing|<kbd>Ctrl</kbd> + <kbd>c</kbd>|
 |Restart Zulip Terminal in place|<kbd>Ctrl</kbd> + <kbd>x</kbd>|
-|Switch the color theme for this session|<kbd>T</kbd>|
+|Switch the color theme|<kbd>T</kbd>|
 |New footer hotkey hint|<kbd>Tab</kbd>|
 
 ## Navigation

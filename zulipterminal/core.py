@@ -29,6 +29,7 @@ from zulipterminal.config.ui_sizes import (
 from zulipterminal.helper import asynch, suppress_output
 from zulipterminal.model import Model
 from zulipterminal.platform_code import PLATFORM
+from zulipterminal.saved_state import save_picked_theme
 from zulipterminal.ui import Screen, View
 from zulipterminal.ui_tools.utils import create_msg_box_list
 from zulipterminal.ui_tools.views import (
@@ -79,6 +80,7 @@ class Controller:
         notify: bool,
         exit_confirmation: bool,
     ) -> None:
+        self.config_file = config_file
         self.theme_name = theme_name
         self.theme = theme
         self.color_depth = color_depth
@@ -267,7 +269,7 @@ class Controller:
 
     def set_theme(self, theme_name: str) -> None:
         """
-        Apply a color theme for the rest of the session.
+        Apply a color theme, and remember it for the next run to start with.
 
         Re-registering the palette updates the escape sequences urwid emits for
         each style name; rendered canvases store those names rather than the
@@ -283,6 +285,10 @@ class Controller:
         )
         self.loop.screen.register_palette(self.theme)
         self.loop.screen.clear()
+        try:
+            save_picked_theme(self.config_file, theme_name)
+        except OSError as error:
+            self.report_warning([f"Theme not saved for the next run: {error}"])
         self.update_screen()
 
     def show_topic_edit_mode(self, button: Any) -> None:

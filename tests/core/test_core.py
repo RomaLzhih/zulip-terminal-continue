@@ -13,6 +13,7 @@ from pytest_mock import MockerFixture
 from zulipterminal.config.themes import generate_theme
 from zulipterminal.core import Controller
 from zulipterminal.helper import Index
+from zulipterminal.saved_state import load_picked_theme
 from zulipterminal.version import ZT_VERSION
 
 
@@ -84,6 +85,7 @@ class TestController:
         self.model.assert_called_once_with(controller)
         self.view.assert_called_once_with(controller)
         self.poll_for_events.assert_called_once_with()
+        assert controller.config_file == self.config_file
         assert controller.theme == self.theme
         assert controller.maximum_footlinks == self.maximum_footlinks
         assert self.main_loop.call_count == 1
@@ -209,6 +211,31 @@ class TestController:
         )
         controller.loop.screen.clear.assert_called_once_with()
         controller.update_screen.assert_called_once_with()
+        # It is what the next run with the same zuliprc file starts with
+        assert load_picked_theme(self.config_file) == "gruvbox_dark"
+
+    def test_set_theme__not_saved(
+        self, controller: Controller, mocker: MockerFixture
+    ) -> None:
+        generate_theme = mocker.patch(MODULE + ".generate_theme")
+        save_picked_theme = mocker.patch(
+            MODULE + ".save_picked_theme", side_effect=OSError("No space left")
+        )
+        update_screen = mocker.patch.object(controller, "update_screen")
+        report_warning = mocker.patch.object(controller, "report_warning")
+
+        controller.set_theme("gruvbox_dark")
+
+        save_picked_theme.assert_called_once_with(self.config_file, "gruvbox_dark")
+        report_warning.assert_called_once_with(
+            ["Theme not saved for the next run: No space left"]
+        )
+        # The theme is still switched to, for this run
+        assert controller.theme_name == "gruvbox_dark"
+        controller.loop.screen.register_palette.assert_called_once_with(
+            generate_theme.return_value
+        )
+        update_screen.assert_called_once_with()
 
     def test_initial_editor_mode(self, controller: Controller) -> None:
         assert not controller.is_in_editor_mode()

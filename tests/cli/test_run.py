@@ -21,6 +21,7 @@ from zulipterminal.cli.run import (
     parse_args,
 )
 from zulipterminal.model import ServerConnectionFailure
+from zulipterminal.saved_state import load_picked_theme, save_picked_theme
 from zulipterminal.version import ZT_VERSION
 
 
@@ -493,6 +494,120 @@ def test_successful_main_function_with_config(
         "   external editor command '' specified from environment.",
     ]
     assert lines == expected_lines
+
+
+@pytest.mark.parametrize(
+    "zuliprc_config, picked_theme, options, expected_theme_setting",
+    [
+        (
+            {"theme": "zt_light"},
+            "gruvbox_dark",
+            [],
+            "theme 'gruvbox_dark' specified in the theme picker.",
+        ),
+        (
+            {},
+            "gruvbox_dark",
+            [],
+            "theme 'gruvbox_dark' specified in the theme picker.",
+        ),
+        (
+            {"theme": "zt_light"},
+            "gruvbox_dark",
+            ["-t", "zt_blue"],
+            "theme 'zt_blue' specified on command line.",
+        ),
+        (
+            {"theme": "zt_light"},
+            "theme_since_removed",
+            [],
+            "theme 'zt_light' specified in zuliprc file.",
+        ),
+        (
+            {},
+            "theme_since_removed",
+            [],
+            "theme 'zt_dark' specified from default config.",
+        ),
+        (
+            {"theme": "zt_light"},
+            None,
+            [],
+            "theme 'zt_light' specified in zuliprc file.",
+        ),
+    ],
+    ids=[
+        "picked_theme_over_zuliprc",
+        "picked_theme_over_default",
+        "command_line_over_picked_theme",
+        "zuliprc_if_picked_theme_does_not_exist",
+        "default_if_picked_theme_does_not_exist",
+        "zuliprc_if_none_picked",
+    ],
+)
+def test_main_theme_from_theme_picker(
+    capsys: CaptureFixture[str],
+    mocker: MockerFixture,
+    parameterized_zuliprc: Callable[[Dict[str, str]], str],
+    zuliprc_config: Dict[str, str],
+    picked_theme: Optional[str],
+    options: List[str],
+    expected_theme_setting: str,
+) -> None:
+    zuliprc = parameterized_zuliprc(zuliprc_config)
+    if picked_theme is not None:
+        save_picked_theme(zuliprc, picked_theme)
+    controller_init = mocker.patch(CONTROLLER + ".__init__", return_value=None)
+    mocker.patch(CONTROLLER + ".main", return_value=None)
+
+    with pytest.raises(SystemExit):
+        main(["-c", zuliprc, *options])
+
+    lines = capsys.readouterr().out.split("\n")
+    assert f"   {expected_theme_setting}" in lines
+
+    controller_settings = controller_init.call_args[1]
+    expected_theme = expected_theme_setting.split("'")[1]
+    assert controller_settings["theme_name"] == expected_theme
+    # The zuliprc is what a theme picked in this run will be saved for
+    assert controller_settings["config_file"] == zuliprc
+
+
+def test_main_theme_from_zuliprc_if_changed_since_theme_was_picked(
+    capsys: CaptureFixture[str],
+    mocker: MockerFixture,
+    parameterized_zuliprc: Callable[[Dict[str, str]], str],
+) -> None:
+    zuliprc = parameterized_zuliprc({"theme": "zt_light"})
+    save_picked_theme(zuliprc, "gruvbox_dark")
+    parameterized_zuliprc({"theme": "zt_blue"})
+    controller_init = mocker.patch(CONTROLLER + ".__init__", return_value=None)
+    mocker.patch(CONTROLLER + ".main", return_value=None)
+
+    with pytest.raises(SystemExit):
+        main(["-c", zuliprc])
+
+    lines = capsys.readouterr().out.split("\n")
+    assert "   theme 'zt_blue' specified in zuliprc file." in lines
+    assert controller_init.call_args[1]["theme_name"] == "zt_blue"
+
+
+def test_main_forgets_picked_theme_if_zuliprc_changed_even_with_theme_option(
+    mocker: MockerFixture,
+    parameterized_zuliprc: Callable[[Dict[str, str]], str],
+) -> None:
+    zuliprc = parameterized_zuliprc({"theme": "zt_light"})
+    save_picked_theme(zuliprc, "gruvbox_dark")
+    parameterized_zuliprc({"theme": "zt_blue"})
+    mocker.patch(CONTROLLER + ".__init__", return_value=None)
+    mocker.patch(CONTROLLER + ".main", return_value=None)
+
+    with pytest.raises(SystemExit):
+        main(["-c", zuliprc, "-t", "zt_dark"])
+
+    # Otherwise it would return, when the zuliprc is set back to how it was
+    parameterized_zuliprc({"theme": "zt_light"})
+    assert load_picked_theme(zuliprc) is None
 
 
 @pytest.mark.parametrize(

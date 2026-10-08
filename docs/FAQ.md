@@ -172,9 +172,12 @@ theme=<theme_name>
 (where _theme_name_ is the name of theme or its alias).
 
 You can also switch theme while the application is running, by pressing
-<kbd>T</kbd> and picking one from the list. That applies immediately and lasts
-for the session; `theme` in `zuliprc` still decides what the next run starts
-with.
+<kbd>T</kbd> and picking one from the list. That applies immediately, and is
+remembered: later runs start with the theme you picked last, in place of the
+one in `zuliprc`. Changing `theme` in `zuliprc` afterwards (or giving a theme on
+the command-line) takes over again. The picked theme is kept for each `zuliprc`
+file separately, in `zulip-terminal/state.json` under `$XDG_STATE_HOME`
+(`~/.local/state` by default).
 
 **NOTE** Theme aliases are likely to be deprecated in the future, so we
 recommend using the full theme names.

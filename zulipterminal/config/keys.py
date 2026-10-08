@@ -353,7 +353,7 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
     },
     'SWITCH_THEME': {
         'keys': ['T'],
-        'help_text': 'Switch the color theme for this session',
+        'help_text': 'Switch the color theme',
         'key_category': 'general',
     },
     'USER_INFO': {

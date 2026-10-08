@@ -1503,8 +1503,8 @@ class ThemePickerView(PopUpView):
     The theme is applied as soon as an entry is activated and the popup stays
     open, so themes can be compared against the messages behind it; EXIT_POPUP
     (or SWITCH_THEME again) closes it, keeping whatever is applied. The choice
-    lasts for the session only - `theme` in zuliprc still decides what the next
-    run starts with.
+    is remembered, so the next run starts with it - until `theme` is changed in
+    zuliprc, which is then the more recent choice (see saved_state.py).
     """
 
     def __init__(self, controller: Any, title: str) -> None:

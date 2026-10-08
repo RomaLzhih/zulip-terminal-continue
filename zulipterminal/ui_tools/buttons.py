@@ -738,8 +738,8 @@ class MessageLinkButton(urwid.Button):
 
 class ThemeButton(urwid.Button):
     """
-    A color theme in the theme picker; activating it applies that theme for the
-    rest of the session.
+    A color theme in the theme picker; activating it applies that theme, which
+    the next run then starts with too.
     """
 
     def __init__(self, *, controller: Any, theme_name: str, is_active: bool) -> None:

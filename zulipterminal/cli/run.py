@@ -27,12 +27,14 @@ from zulipterminal.config.themes import (
 from zulipterminal.core import Controller
 from zulipterminal.model import ServerConnectionFailure
 from zulipterminal.platform_code import detected_platform, detected_python_in_full
+from zulipterminal.saved_state import load_picked_theme
 from zulipterminal.version import ZT_VERSION
 
 
 class ConfigSource(Enum):
     DEFAULT = "from default config"
     ZULIPRC = "in zuliprc file"
+    THEME_PICKER = "in the theme picker"
     ENV = "from environment"
     COMMANDLINE = "on command line"
 
@@ -493,13 +495,18 @@ def main(options: Optional[List[str]] = None) -> None:
             maximum_footlinks = int(zterm["maximum-footlinks"].value)
 
         ### Load theme override & validate
+        available_themes = all_themes()
+        # A theme picked while running is remembered, until `theme` is next
+        # changed in the zuliprc file; one which no longer exists is passed over
+        picked_theme = load_picked_theme(zuliprc_path)
         if args.theme:
             theme_to_use = SettingData(args.theme, ConfigSource.COMMANDLINE)
+        elif picked_theme is not None and picked_theme in available_themes:
+            theme_to_use = SettingData(picked_theme, ConfigSource.THEME_PICKER)
         else:
             theme_to_use = zterm["theme"]
 
         theme_alias_suffix = ""
-        available_themes = all_themes()
         theme_aliases = aliased_themes()
         is_valid_theme = (
             theme_to_use.value in available_themes
