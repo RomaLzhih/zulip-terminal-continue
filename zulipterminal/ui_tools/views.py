@@ -1372,7 +1372,11 @@ class HelpView(PopUpView):
                         "@attach:~/Doc",
                     ),
                     (
-                        "Complete/cycle the path (directories end in /)",
+                        "Complete the path, a directory per press",
+                        primary_display_key_for_command("AUTOCOMPLETE"),
+                    ),
+                    (
+                        "Press again to cycle, when several names match",
                         primary_display_key_for_command("AUTOCOMPLETE"),
                     ),
                     (

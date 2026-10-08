@@ -98,6 +98,14 @@ class VimEditBox(ReadlineEdit):
         # First key of a pending two-key sequence ("d" or "g"), else None.
         self._vim_pending: Optional[str] = None
 
+    def restart_autocomplete_on_next_key(self) -> None:
+        """
+        Drop urwid_readline's cached completion, so the next AUTOCOMPLETE press
+        starts over from the text as it now stands rather than cycling through
+        the candidates of the token as it was originally typed.
+        """
+        self._autocomplete_state = None
+
     def enter_insert_mode(self) -> None:
         self.vim_mode = "insert"
         self._vim_pending = None
@@ -108,6 +116,14 @@ class VimEditBox(ReadlineEdit):
 
     def keypress(self, size: urwid_Size, key: str) -> Optional[str]:
         if self.vim_mode != "normal":
+            return super().keypress(size, key)
+        # Autocomplete is not a vim motion, but normal mode swallows every key
+        # it does not recognize, which left AUTOCOMPLETE silently dead after
+        # any ESC - with no hint that insert mode was the missing part. It
+        # edits no text of its own, so let it through in either mode.
+        if is_command_key("AUTOCOMPLETE", key) or is_command_key(
+            "AUTOCOMPLETE_REVERSE", key
+        ):
             return super().keypress(size, key)
         # Motions such as next_line/end_of_line rely on self.size, which is
         # normally refreshed by ReadlineEdit.keypress; set it here too.
@@ -632,6 +648,14 @@ class WriteBox(urwid.Pile):
             typeahead = self._process_typeaheads(typeaheads, state, suggestions)
             if typeahead:
                 typeahead = text[:attach_index] + typeahead
+                if len(typeaheads) == 1 and hasattr(self, "msg_write_box"):
+                    # A lone candidate has no siblings to cycle through, so let
+                    # the next AUTOCOMPLETE start afresh from what was just
+                    # inserted. That walks *into* a completed directory, a
+                    # segment per press, the way a shell or editor does;
+                    # otherwise readline would keep re-offering the same
+                    # candidate for the token as originally typed.
+                    self.msg_write_box.restart_autocomplete_on_next_key()
             return typeahead
 
         autocomplete_map = {
@@ -717,6 +741,13 @@ class WriteBox(urwid.Pile):
         expands '~' and resolves relative paths against the working directory.
         """
         path = text[len(prefix_string) :]
+        # '@attach: <path>' uploads fine on send, since _expand_attachments
+        # strips the token, so complete it too rather than silently offering
+        # nothing. The spacing as typed is kept in what gets inserted.
+        indent = path[: len(path) - len(path.lstrip())]
+        path = path[len(indent) :]
+        prefix_string += indent
+
         if path == "~":
             return [prefix_string + "~/"], ["~/"]
 

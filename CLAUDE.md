@@ -254,6 +254,21 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   starts with `.`, and a bare `~` completes to `~/`. The directory is otherwise
   left exactly as typed rather than expanded, matching `_expand_attachments`
   (which expands `~` and resolves relative paths against the working directory).
+  Two ways the key could look broken, both fixed: `VimEditBox` normal mode
+  swallows every key it does not recognize, so `AUTOCOMPLETE` was silently dead
+  after any `esc` (it now passes through in either mode, without leaving normal
+  mode); and `@attach: <path>` with a space after the colon offered nothing
+  even though `_expand_attachments` strips the token and uploads it fine on
+  send (the completer now skips that spacing and preserves it when inserting).
+  Repeated presses **walk down the tree** a segment at a time, as a shell or
+  editor does. urwid_readline caches an `AutocompleteState` on the first press
+  and afterwards only bumps its index against the *originally typed* token, so
+  completing `~/Doc` to `~/Documents/` and pressing again just re-offered
+  `~/Doc` — the path could never descend. When a completion is the only
+  candidate there is nothing to cycle through anyway, so that state is dropped
+  (`VimEditBox.restart_autocomplete_on_next_key`) and the next press re-reads
+  the extended text. Several candidates still cycle, since the alternatives
+  must stay reachable.
   Dispatched at the top of `generic_autocomplete`, *before* its prefix map:
   `@attach:` contains both `@` and `:`, and that map picks the **right-most**
   prefix, so the `:` would otherwise offer emojis for what is a path. Because a
@@ -264,7 +279,9 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   `tests/ui_tools/test_boxes.py::TestWriteBox` (`test_autocomplete_path*`,
   `test_generic_autocomplete_path`,
   `test__refresh_autocomplete_footer_preview_path_with_space`) against a real
-  `tmp_path` tree.
+  `tmp_path` tree; the walking/cycling pair drives real `AUTOCOMPLETE`
+  keypresses through `WriteBox`, since testing `generic_autocomplete` directly
+  bypasses the readline state that made descending fail.
 - `model.py: Model._handle_message_event` — a message **we** sent scrolls into
   view automatically: after appending it to the log, the message view is focused
   on it. Appending alone only reveals the new message when the focus already

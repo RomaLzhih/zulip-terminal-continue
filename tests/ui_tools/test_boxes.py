@@ -1332,11 +1332,7 @@ class TestWriteBox:
                 ["my file.png", "nested/"],
                 id="inside_a_completed_directory",
             ),
-            case(
-                "Documents/my",
-                ["my file.png"],
-                id="name_containing_a_space",
-            ),
+            case("Documents/my", ["my file.png"], id="name_containing_a_space"),
             case(".", [".hidden"], id="dotfiles_once_explicitly_requested"),
             case("nomatch", [], id="no_match"),
         ],
@@ -1410,6 +1406,109 @@ class TestWriteBox:
                 f"{prefix_text}{ATTACH_TOKEN_PREFIX}"
                 f"{attachment_dir}{os.sep}{expected_name}"
             )
+
+    def test_autocomplete_path_walks_into_unique_directory(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        attachment_dir: Path,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        """
+        Repeated AUTOCOMPLETE presses descend a segment at a time, as in a shell
+        or an editor. Without dropping readline's cached candidates, the second
+        press would re-offer the directory just completed instead of entering
+        it, leaving the path stuck one level up.
+        """
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        size = widget_size(write_box)
+        prefix = f"{ATTACH_TOKEN_PREFIX}{attachment_dir}{os.sep}"
+        write_box.msg_write_box.edit_text = f"{prefix}Doc"
+        write_box.msg_write_box.edit_pos = len(write_box.msg_write_box.edit_text)
+
+        write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+
+        assert write_box.msg_write_box.edit_text == f"{prefix}Documents{os.sep}"
+
+        write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+
+        # Now inside the completed directory, on its first entry
+        assert (
+            write_box.msg_write_box.edit_text == f"{prefix}Documents{os.sep}my file.png"
+        )
+
+    @pytest.mark.parametrize(
+        "vim_mode", ["insert", "normal"], ids=["insert_mode", "vim_normal_mode"]
+    )
+    def test_autocomplete_path_completes_in_either_vim_mode(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        attachment_dir: Path,
+        widget_size: Callable[[Widget], urwid_Size],
+        vim_mode: str,
+    ) -> None:
+        """
+        Normal mode swallows keys it does not recognize, which left AUTOCOMPLETE
+        silently dead after any ESC - and nothing on screen said insert mode was
+        the missing part.
+        """
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        size = widget_size(write_box)
+        prefix = f"{ATTACH_TOKEN_PREFIX}{attachment_dir}{os.sep}"
+        write_box.msg_write_box.edit_text = f"{prefix}Doc"
+        write_box.msg_write_box.edit_pos = len(write_box.msg_write_box.edit_text)
+        if vim_mode == "normal":
+            write_box.msg_write_box.enter_normal_mode()
+
+        write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+
+        assert write_box.msg_write_box.edit_text == f"{prefix}Documents{os.sep}"
+        # Completing must not smuggle the body back into insert mode
+        assert write_box.msg_write_box.vim_mode == vim_mode
+
+    def test_autocomplete_path_after_space_following_token(
+        self, write_box: WriteBox, attachment_dir: Path
+    ) -> None:
+        """
+        '@attach: <path>' uploads fine on send, since _expand_attachments strips
+        the token, so it must complete too rather than offering nothing.
+        """
+        typed = f"{ATTACH_TOKEN_PREFIX} {attachment_dir}{os.sep}Doc"
+
+        typeahead = write_box.generic_autocomplete(typed, 0)
+
+        assert typeahead == (
+            f"{ATTACH_TOKEN_PREFIX} {attachment_dir}{os.sep}Documents{os.sep}"
+        )
+
+    def test_autocomplete_path_cycles_between_ambiguous_directories(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        attachment_dir: Path,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        """
+        Several candidates are still cycled through, rather than descending into
+        the first: the alternatives have to remain reachable.
+        """
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        size = widget_size(write_box)
+        prefix = f"{ATTACH_TOKEN_PREFIX}{attachment_dir}{os.sep}"
+        write_box.msg_write_box.edit_text = f"{prefix}D"
+        write_box.msg_write_box.edit_pos = len(write_box.msg_write_box.edit_text)
+
+        write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+
+        assert write_box.msg_write_box.edit_text == f"{prefix}Documents{os.sep}"
+
+        write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+
+        assert write_box.msg_write_box.edit_text == f"{prefix}Downloads{os.sep}"
 
     def test__refresh_autocomplete_footer_preview_path_with_space(
         self, mocker: MockerFixture, write_box: WriteBox, attachment_dir: Path
