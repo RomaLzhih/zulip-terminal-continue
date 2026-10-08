@@ -2057,8 +2057,52 @@ class TestModel:
         if sender_is_me:
             # The appended message is now the last entry in the log
             message_view.set_focus.assert_called_once_with(len(message_view.log) - 1)
+            message_view.set_focus_valign.assert_called_once_with("bottom")
         else:
             message_view.set_focus.assert_not_called()
+            message_view.set_focus_valign.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "compose_box_status, expected_scroll",
+        [
+            ("closed", False),
+            ("open_with_stream", True),
+            ("open_with_private", True),
+        ],
+        ids=[
+            "not_composing_leaves_view_alone",
+            "composing_to_stream_scrolls_into_view",
+            "composing_to_private_scrolls_into_view",
+        ],
+    )
+    def test__handle_message_event_scrolls_while_composing(
+        self, mocker, model, message_fixture, compose_box_status, expected_scroll
+    ):
+        """
+        A message from somebody else is focused - so that it is visible without
+        scrolling down by hand - while the compose box is open, since the user
+        is writing into this conversation rather than reading scrollback.
+        """
+        model._have_last_message[repr([])] = True
+        mocker.patch(MODEL + "._update_topic_index")
+        mocker.patch(MODULE + ".index_messages", return_value={})
+        message_view = mocker.Mock(log=[mocker.Mock()])
+        self.controller.view.message_view = message_view
+        self.controller.view.write_box.compose_box_status = compose_box_status
+        mocker.patch(MODULE + ".create_msg_box_list", return_value=["msg_w"])
+        model.notify_user = mocker.Mock()
+        message_fixture["sender_id"] = model.user_id + 1
+        event = {"type": "message", "message": message_fixture}
+
+        model._handle_message_event(event)
+
+        if expected_scroll:
+            # The appended message is now the last entry in the log
+            message_view.set_focus.assert_called_once_with(len(message_view.log) - 1)
+            message_view.set_focus_valign.assert_called_once_with("bottom")
+        else:
+            message_view.set_focus.assert_not_called()
+            message_view.set_focus_valign.assert_not_called()
 
     def test__handle_message_event_with_flags(self, mocker, model, message_fixture):
         model._have_last_message[repr([])] = True

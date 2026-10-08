@@ -1729,6 +1729,20 @@ class Model:
             )
         return ""
 
+    def _is_composing(self) -> bool:
+        """
+        True while the compose box is open - writing a new message, or editing
+        an existing one.
+        """
+        if not hasattr(self.controller, "view"):
+            return False
+        # Tested against the open states, rather than against "closed", so that
+        # anything which is not a real compose status reads as not composing.
+        return self.controller.view.write_box.compose_box_status in (
+            "open_with_stream",
+            "open_with_private",
+        )
+
     def _handle_message_event(self, event: Event) -> None:
         """
         Handle new messages (eg. add message to the end of the view)
@@ -1806,13 +1820,25 @@ class Model:
 
             if self.current_narrow_contains_message(message):
                 msg_log.append(msg_w)
-                # Scroll to a message we sent ourselves, so it is visible
-                # without scrolling down by hand: appending alone only reveals
-                # it when the focus already sits on the previously last
-                # message. Messages from others deliberately do not move the
-                # view, which would yank the reader away mid-read.
-                if message["sender_id"] == self.user_id:
-                    self.controller.view.message_view.set_focus(len(msg_log) - 1)
+                # Scroll the new message into view, which appending alone only
+                # achieves when the focus already sits on the previously last
+                # message. This is done for a message we sent ourselves, and
+                # for any message arriving while the compose box is open: in
+                # both cases the user is writing into this conversation rather
+                # than reading scrollback, so an incoming message should be
+                # visible instead of piling up below the fold. Otherwise the
+                # view deliberately stays put, rather than yanking a reader
+                # away mid-read.
+                if message["sender_id"] == self.user_id or self._is_composing():
+                    message_view = self.controller.view.message_view
+                    message_view.set_focus(len(msg_log) - 1)
+                    # Pin it to the bottom of the message area, as a chat
+                    # client does. Focusing alone leaves a message which is
+                    # already partly on screen exactly where it is, so a new
+                    # message could still be clipped to its first line by the
+                    # bottom edge; urwid also renders blank space below the
+                    # last message otherwise.
+                    message_view.set_focus_valign("bottom")
 
             self.controller.update_screen()
 

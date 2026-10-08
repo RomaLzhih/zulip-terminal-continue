@@ -282,22 +282,41 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   `tmp_path` tree; the walking/cycling pair drives real `AUTOCOMPLETE`
   keypresses through `WriteBox`, since testing `generic_autocomplete` directly
   bypasses the readline state that made descending fail.
-- `model.py: Model._handle_message_event` — a message **we** sent scrolls into
-  view automatically: after appending it to the log, the message view is focused
-  on it. Appending alone only reveals the new message when the focus already
-  happens to sit on the previously last message (urwid's ListBox fills the rows
-  below the focus widget); with the focus higher up — the common case, since
-  narrowing focuses the first *unread* message — it lands below the fold and had
-  to be scrolled to by hand. Gated on `message["sender_id"] == self.user_id`:
-  moving the view for someone else's message would yank the reader away
-  mid-read. No mark-as-read fallout, since our own messages arrive already
-  flagged `read`, so `MessageView.read_message` (run via `ModListWalker`'s focus
-  action) stops immediately instead of walking up over unread messages.
-  Reactions need no equivalent: the reacted message is by definition the focused
-  one, and urwid already reflows so its new reaction row stays visible —
-  verified by rendering real `MessageBox` widgets in a `ModListWalker` listbox
-  before and after the swap `_update_rendered_view` performs. Tested by
-  `tests/model/test_model.py::TestModel::test__handle_message_event_scrolls_to_own_message`.
+- `model.py: Model._handle_message_event` — a new message scrolls into view
+  automatically: after appending it to the log, the message view is focused on
+  it and `set_focus_valign("bottom")` pins it to the bottom of the message area,
+  as a chat client does. Appending alone only reveals the new message when the
+  focus already happens to sit on the previously last message (urwid's ListBox
+  fills the rows below the focus widget); with the focus higher up — the common
+  case, since narrowing focuses the first *unread* message — it lands below the
+  fold and had to be scrolled to by hand. Focusing alone is not enough either:
+  urwid's `_set_focus_complete` leaves an already-partly-visible widget exactly
+  where it is, so a new message could still be clipped to its first line by the
+  bottom edge (and centers it, leaving blank space below, when it was off
+  screen). Two cases move the view, both meaning "the user is writing here, not
+  reading scrollback":
+  * `message["sender_id"] == self.user_id` — a message we sent ourselves. No
+    mark-as-read fallout, since our own messages arrive already flagged `read`,
+    so `MessageView.read_message` (run via `ModListWalker`'s focus action) stops
+    immediately instead of walking up over unread messages.
+  * `Model._is_composing()` — the compose box is open (writing a new message or
+    editing an existing one), so messages from others stay in view while typing
+    instead of piling up below the fold. Checked as
+    `controller.view.write_box.compose_box_status in ("open_with_stream",
+    "open_with_private")` — enumerating the open states rather than testing
+    `!= "closed"`, so a mocked-out view in the model tests does not read as
+    composing. This *does* mark those messages read as they arrive (they are
+    focused, and `read_message` marks the last message plus any unread above
+    it), which matches them being on screen.
+
+  Otherwise the view deliberately stays put, rather than yanking a reader away
+  mid-read. Reactions need no equivalent: the reacted message is by definition
+  the focused one, and urwid already reflows so its new reaction row stays
+  visible — verified by rendering real `MessageBox` widgets in a `ModListWalker`
+  listbox before and after the swap `_update_rendered_view` performs. Tested by
+  `tests/model/test_model.py::TestModel` —
+  `test__handle_message_event_scrolls_to_own_message` and
+  `test__handle_message_event_scrolls_while_composing`.
 - `themes/catppuccin_mocha.py` + `themes/colors_catppuccin.py` — a
   **Catppuccin Mocha** theme, registered in `config/themes.py: THEMES` (no
   alias: that table is explicitly closed to additions) and listed in
