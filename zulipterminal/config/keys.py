@@ -305,6 +305,11 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
         'help_text': 'Show/hide message sender information',
         'key_category': 'msg_actions',
     },
+    'COPY_MESSAGE': {
+        'keys': ['y'],
+        'help_text': "Copy the current message's text to the clipboard",
+        'key_category': 'msg_actions',
+    },
     'EDIT_HISTORY': {
         'keys': ['e'],
         'help_text': 'Show/hide edit history',

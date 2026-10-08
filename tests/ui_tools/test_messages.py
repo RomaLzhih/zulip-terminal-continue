@@ -1473,6 +1473,30 @@ class TestMessageBox:
             else:
                 report_error.assert_called_once_with([expect_footer_text[message_type]])
 
+    @pytest.mark.parametrize("key", keys_for_command("COPY_MESSAGE"))
+    def test_keypress_COPY_MESSAGE(self, msg_box, widget_size, key):
+        size = widget_size(msg_box)
+        msg_box.model.fetch_raw_message_content.return_value = "Hello, **world**!"
+
+        msg_box.keypress(size, key)
+
+        msg_box.model.fetch_raw_message_content.assert_called_once_with(
+            msg_box.message["id"]
+        )
+        msg_box.model.controller.copy_to_clipboard.assert_called_once_with(
+            "Hello, **world**!", "Message"
+        )
+
+    @pytest.mark.parametrize("key", keys_for_command("COPY_MESSAGE"))
+    def test_keypress_COPY_MESSAGE_fetch_failed(self, msg_box, widget_size, key):
+        size = widget_size(msg_box)
+        # A failed fetch reports its own error, and leaves the clipboard alone
+        msg_box.model.fetch_raw_message_content.return_value = None
+
+        msg_box.keypress(size, key)
+
+        msg_box.model.controller.copy_to_clipboard.assert_not_called()
+
     @pytest.mark.parametrize(
         "raw_html, expected_content",
         [

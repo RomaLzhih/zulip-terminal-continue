@@ -1241,4 +1241,11 @@ class MessageBox(urwid.Pile):
             self.model.controller.show_emoji_picker(self.message)
         elif is_command_key("MSG_SENDER_INFO", key):
             self.model.controller.show_msg_sender_info(self.message["sender_id"])
+        elif is_command_key("COPY_MESSAGE", key):
+            # The message is only held here in its rendered HTML form, so the
+            # text worth copying (the markdown the sender wrote) comes from the
+            # server, as it does for quoting and editing.
+            response = self.model.fetch_raw_message_content(self.message["id"])
+            if response is not None:
+                self.model.controller.copy_to_clipboard(response, "Message")
         return key
