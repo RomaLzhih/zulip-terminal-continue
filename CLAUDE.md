@@ -72,8 +72,8 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
 - `ui_tools/boxes.py: WriteBox._refresh_autocomplete_footer_preview` — live
   autocomplete preview in the message body: as you type a `@`/`#`/`:` token
   (the whitespace-delimited word at the cursor), candidates appear in the
-  footer automatically, without pressing AUTOCOMPLETE (ctrl f). The preview
-  lists matches with nothing selected (`state=None`); ctrl f still cycles and
+  footer automatically, without pressing AUTOCOMPLETE (ctrl n). The preview
+  lists matches with nothing selected (`state=None`); ctrl n still cycles and
   inserts as before. Wired from `WriteBox.keypress` after the child edit box
   handles the key (skipped for the AUTOCOMPLETE keys so it can't clobber the
   highlighted selection).
@@ -247,7 +247,7 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   `tests/ui_tools/test_boxes.py::TestWriteBox::test_request_exit_compose_closes_compose_from_insert_mode`.
 - `ui_tools/boxes.py: WriteBox.autocomplete_path` — `@attach:<path>` tokens get
   **shell-style path completion**: candidates preview in the footer as you type
-  and `AUTOCOMPLETE` (ctrl f) cycles/inserts them, like mentions and emojis.
+  and `AUTOCOMPLETE` (ctrl n) cycles/inserts them, like mentions and emojis.
   The typed path is split at its last `/` into a directory to list and a partial
   name matched case-insensitively; directories complete with a trailing `/` (so
   the next completion descends), dotfiles appear only once the partial name
@@ -274,7 +274,7 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   prefix, so the `:` would otherwise offer emojis for what is a path. Because a
   path runs to the end of the line, `_refresh_autocomplete_footer_preview` finds
   the token with `line.rfind(ATTACH_TOKEN_PREFIX)` instead of using the last
-  whitespace-delimited word, so paths containing spaces still preview (`ctrl f`
+  whitespace-delimited word, so paths containing spaces still preview (`ctrl n`
   was already unaffected — `DELIMS_MESSAGE_COMPOSE` is only `\t\n;`). Tested in
   `tests/ui_tools/test_boxes.py::TestWriteBox` (`test_autocomplete_path*`,
   `test_generic_autocomplete_path`,
@@ -501,6 +501,26 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   MAX_EMOJI_PICKER_WIDTH` caps it at about the width it had, the 12 longer
   labels being cut short with an ellipsis by `TopButton`. Tested by
   `test_init_width_not_stretched_by_many_aliases`.
+- `config/keys.py: AUTOCOMPLETE` — autocomplete is on **`ctrl n`** (upstream:
+  `ctrl f`), vim's own completion key; `AUTOCOMPLETE_REVERSE` is still
+  `ctrl r`. The one key is enough because cycling wraps: past the last
+  candidate it restores the typed text (nothing selected), then starts over.
+  That is upstream behavior, not new code — `urwid_readline`'s `_complete`
+  drops its state when `_process_typeaheads` returns `None` for an
+  out-of-range index — now pinned by
+  `tests/ui_tools/test_boxes.py::TestWriteBox::test_keypress_AUTOCOMPLETE_cycles_and_wraps_around`.
+  `ReadlineEdit.keypress` checks the autocomplete key before its own keymap,
+  so in the compose boxes `ctrl n` no longer moves down a line (hence it was
+  dropped from the documentation-only `NEXT_LINE` entry) and `ctrl f` is back
+  to readline's forward-char.
+  `ctrl shift n` was wanted for reverse and is **not deliverable**, so do not
+  bind `ctrl shift <letter>` commands: a terminal sends the same byte (0x0e)
+  for it as for `ctrl n` unless an extended-key protocol is in play. Ghostty
+  does send `CSI 110;6u`, but tmux folds that back into 0x0e — even with
+  `extended-keys on` and the app requesting modifyOtherKeys mode 1. Only mode 2
+  keeps it distinct, and that re-encodes *every* ctrl key (`ctrl c` arrives as
+  `CSI 27;5;99~` and no longer raises SIGINT), none of which urwid 2.1.2
+  decodes.
 
 ## Testing
 

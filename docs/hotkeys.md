@@ -97,7 +97,7 @@
 |Send a message|<kbd>Ctrl</kbd> + <kbd>d</kbd> / <kbd>Meta</kbd> + <kbd>Enter</kbd>|
 |Save current message as a draft|<kbd>Meta</kbd> + <kbd>s</kbd>|
 |Paste an image from the clipboard, to upload on send|<kbd>Ctrl</kbd> + <kbd>v</kbd>|
-|Autocomplete @mentions, #stream_names, :emoji: and topics|<kbd>Ctrl</kbd> + <kbd>f</kbd>|
+|Autocomplete @mentions, #stream_names, :emoji: and topics|<kbd>Ctrl</kbd> + <kbd>n</kbd>|
 |Cycle through autocomplete suggestions in reverse|<kbd>Ctrl</kbd> + <kbd>r</kbd>|
 |Exit compose box (in the body, first enters vim normal mode)|<kbd>Esc</kbd>|
 |Insert new line|<kbd>Enter</kbd>|
@@ -111,7 +111,7 @@
 |Start of current or previous word|<kbd>Meta</kbd> + <kbd>b</kbd> / <kbd>Shift</kbd> + <kbd>Left</kbd>|
 |Start of next word|<kbd>Meta</kbd> + <kbd>f</kbd> / <kbd>Shift</kbd> + <kbd>Right</kbd>|
 |Previous line|<kbd>Up</kbd> / <kbd>Ctrl</kbd> + <kbd>p</kbd>|
-|Next line|<kbd>Down</kbd> / <kbd>Ctrl</kbd> + <kbd>n</kbd>|
+|Next line|<kbd>Down</kbd>|
 
 ## Editor: Text Manipulation
 |Command|Key Combination|

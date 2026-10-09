@@ -163,7 +163,7 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
         'key_category': 'compose_box',
     },
     'AUTOCOMPLETE': {
-        'keys': ['ctrl f'],
+        'keys': ['ctrl n'],
         'help_text': ('Autocomplete @mentions, #stream_names, :emoji:'
                       ' and topics'),
         'key_category': 'compose_box',
@@ -400,7 +400,7 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
         'key_category': 'editor_navigation',
     },
     'NEXT_LINE': {
-        'keys': ['down', 'ctrl n'],
+        'keys': ['down'],
         'help_text': 'Next line',
         'key_category': 'editor_navigation',
     },

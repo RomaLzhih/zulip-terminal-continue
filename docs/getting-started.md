@@ -149,15 +149,15 @@ From version 0.7.0 you can also use autocomplete to enter people's names from pa
 To send a direct message using the autocomplete feature:
 1. Use the <kbd>x</kbd> hotkey. A message editor will pop open at the bottom of the middle column. 
 2. Type in part of the name of the person you'd like to send a direct message to (IMG 1)
-3. Press <kbd>ctrl</kbd><kbd>f</kbd> and a list of potential recipients will appear in the footer (highlighted in red). 
-4. Press <kbd>ctrl</kbd><kbd>f</kbd> until the name of the person you want to send a message to is highlighted (IMG 2). 
+3. Press <kbd>ctrl</kbd><kbd>n</kbd> and a list of potential recipients will appear in the footer (highlighted in red). 
+4. Press <kbd>ctrl</kbd><kbd>n</kbd> until the name of the person you want to send a message to is highlighted (IMG 2). 
 5. Press <kbd>tab</kbd> to jump to the message section and type in your message. 
 6. Press <kbd>ctrl</kbd><kbd>d</kbd> to send.
 7. Press <kbd>esc</kbd> to get out of the message editor.
 
 Try following the steps above to send a message to the Welcome Bot!
 
-> It's best to use <kbd>ctrl</kbd><kbd>f</kbd> to autocomplete the name and Zulip address of the person (or bot) you want to message; if you just type in their full name, Zulip Terminal does not know for sure who you are trying to send to - and there may be multiple people with that name!
+> It's best to use <kbd>ctrl</kbd><kbd>n</kbd> to autocomplete the name and Zulip address of the person (or bot) you want to message; if you just type in their full name, Zulip Terminal does not know for sure who you are trying to send to - and there may be multiple people with that name!
 
 <img src="getting-started-imgs/send-pm-autocomplete1.png" width="85%">
 <img src="getting-started-imgs/send-pm-autocomplete2.png" width="85%">

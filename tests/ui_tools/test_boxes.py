@@ -778,6 +778,39 @@ class TestWriteBox:
         _, state, _ = write_box.view.set_typeahead_footer.call_args[0]
         assert state == 0
 
+    def test_keypress_AUTOCOMPLETE_cycles_and_wraps_around(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+    ) -> None:
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=1)
+        # Treat every user as a subscriber of this stream so the channel-only
+        # mention filter is a no-op here.
+        write_box.recipient_user_ids = [
+            user["user_id"] for user in write_box.view.users
+        ]
+        write_box.focus_position = write_box.FOCUS_CONTAINER_MESSAGE
+        write_box.msg_write_box.set_edit_text("@Human D")
+        write_box.msg_write_box.set_edit_pos(len("@Human D"))
+        size = widget_size(write_box)
+
+        cycle = []
+        for _ in range(4):
+            write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+            _, state, _ = write_box.view.set_typeahead_footer.call_args[0]
+            cycle.append((write_box.msg_write_box.edit_text, state))
+
+        # The AUTOCOMPLETE key alone reaches every candidate: past the last one
+        # it restores the typed text (nothing selected), then starts over.
+        assert cycle == [
+            ("@**Human Duplicate|13**", 0),
+            ("@**Human Duplicate|14**", 1),
+            ("@Human D", None),
+            ("@**Human Duplicate|13**", 0),
+        ]
+
     def _open_stream_compose_focused_on_body(
         self,
         mocker: MockerFixture,

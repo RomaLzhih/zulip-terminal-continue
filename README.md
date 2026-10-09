@@ -22,7 +22,7 @@
 >   `NORMAL` indicator.
 > - **Compose: live autocomplete preview.** As you type a `@`/`#`/`:` token, the
 >   matches appear in the footer automatically — no need to press
->   autocomplete (<kbd>ctrl</kbd>+<kbd>f</kbd>), which still cycles/inserts.
+>   autocomplete (<kbd>ctrl</kbd>+<kbd>n</kbd>), which still cycles/inserts.
 > - **Compose: `@attach:<path>` file uploads.** An `@attach:<path>` token in the
 >   compose box (path runs to end of line, `~` expanded) uploads the file on send
 >   and turns into a markdown link; a failed upload aborts the send with a footer
@@ -444,7 +444,7 @@ stream.
   (Save [regular mentions](https://zulip.com/help/mention-a-user-or-group#mention-a-user-or-group_1)
   for those who you do not expect to be present on a regular basis)
 
-  *Try <kbd>Ctrl</kbd>+<kbd>f</kbd>/<kbd>b</kbd> to cycle through autocompletion in message content, after typing `@_` to specify a silent mention*
+  *Try <kbd>Ctrl</kbd>+<kbd>n</kbd> to cycle through autocompletion in message content, after typing `@_` to specify a silent mention*
 
 * **Prefer trimming [quote and reply](https://zulip.com/help/quote-and-reply)
   text to only the relevant parts of longer messages - or avoid quoting entirely**
