@@ -23,6 +23,9 @@
 > - **Compose: live autocomplete preview.** As you type a `@`/`#`/`:` token, the
 >   matches appear in the footer automatically — no need to press
 >   autocomplete (<kbd>ctrl</kbd>+<kbd>n</kbd>), which still cycles/inserts.
+>   The topic box does the same with the stream's existing topics, listing the
+>   most recent ones as soon as you <kbd>tab</kbd> into it, so you can pick an
+>   existing topic instead of starting a new one by accident.
 > - **Compose: `@attach:<path>` file uploads.** An `@attach:<path>` token in the
 >   compose box (path runs to end of line, `~` expanded) uploads the file on send
 >   and turns into a markdown link; a failed upload aborts the send with a footer

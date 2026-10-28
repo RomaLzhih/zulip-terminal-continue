@@ -2,7 +2,7 @@ import datetime
 import os
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
 from pytest import param as case
@@ -810,6 +810,222 @@ class TestWriteBox:
             ("@Human D", None),
             ("@**Human Duplicate|13**", 0),
         ]
+
+    def _open_stream_compose_focused_on_topic(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        topics: List[str],
+        topic_text: str = "",
+        stream_id: int = 1,
+    ) -> None:
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        write_box.stream_box_view(stream_id=stream_id, title=topic_text)
+        write_box.model.topics_in_stream.return_value = topics
+        write_box.focus_position = write_box.FOCUS_CONTAINER_HEADER
+        write_box.header_write_box.focus_col = write_box.FOCUS_HEADER_BOX_TOPIC
+        write_box.title_write_box.set_edit_pos(len(topic_text))
+
+    @pytest.mark.parametrize(
+        "topic_text, key, expected_topic_text, expected_suggestions",
+        [
+            case(
+                "Hell",
+                "o",
+                "Hello",
+                ["Hello there!", "Hello t/here!", "Hello from out-er_space!"],
+                id="typed_character",
+            ),
+            case(
+                "Topic 1x", "backspace", "Topic 1", ["Topic 1"], id="deleted_character"
+            ),
+            case("Topic 1x", "left", "Topic 1x", ["Topic 1"], id="moved_caret"),
+        ],
+    )
+    def test_keypress_topic_box_shows_topic_preview(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        topics: List[str],
+        topic_text: str,
+        key: str,
+        expected_topic_text: str,
+        expected_suggestions: List[str],
+    ) -> None:
+        self._open_stream_compose_focused_on_topic(
+            mocker, write_box, topics, topic_text, stream_id=5
+        )
+        size = widget_size(write_box)
+
+        write_box.keypress(size, key)
+
+        # The stream's matching topics are listed in the footer as the topic is
+        # typed, without pressing AUTOCOMPLETE, and with nothing selected (the
+        # match is against the text before the caret, as AUTOCOMPLETE uses).
+        assert write_box.title_write_box.edit_text == expected_topic_text
+        write_box.model.topics_in_stream.assert_called_with(5)
+        write_box.view.set_typeahead_footer.assert_called_once_with(
+            expected_suggestions, None, False
+        )
+        assert write_box.is_in_typeahead_mode is True
+
+    @pytest.mark.parametrize(
+        "message_being_edited, msg_body_edit_enabled, initial_focus_names",
+        [
+            case(
+                False,
+                True,
+                ("CONTAINER_HEADER", "HEADER_BOX_STREAM"),
+                id="stream_box_to_topic_box",
+            ),
+            case(
+                True,
+                True,
+                ("CONTAINER_MESSAGE", None),
+                id="edit_box-message_box_to_topic_box",
+            ),
+            case(
+                True,
+                False,
+                ("CONTAINER_HEADER", "HEADER_BOX_EDIT"),
+                id="topic_edit_only-edit_mode_box_to_topic_box",
+            ),
+        ],
+    )
+    def test_keypress_CYCLE_COMPOSE_FOCUS_into_topic_box_shows_topic_preview(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        topics: List[str],
+        message_being_edited: bool,
+        msg_body_edit_enabled: bool,
+        initial_focus_names: Tuple[str, Optional[str]],
+        stream_id: int = 5,
+    ) -> None:
+        mocker.patch(WRITEBOX + "._set_stream_write_box_style")
+        if message_being_edited:
+            mocker.patch(MODULE + ".EditModeButton")
+            write_box.stream_box_edit_view(stream_id, caption="Some stream")
+            write_box.msg_edit_state = _MessageEditState(
+                message_id=10, old_topic="(no topic)"
+            )
+        else:
+            write_box.stream_box_view(stream_id, caption="Some stream")
+            write_box.model.stream_id_from_name.return_value = stream_id
+        write_box.msg_body_edit_enabled = msg_body_edit_enabled
+        write_box.model.topics_in_stream.return_value = topics
+        focus_name, focus_col_name = initial_focus_names
+        write_box.focus_position = getattr(write_box, "FOCUS_" + focus_name)
+        if focus_col_name is not None:
+            write_box.header_write_box.focus_col = getattr(
+                write_box, "FOCUS_" + focus_col_name
+            )
+        size = widget_size(write_box)
+
+        write_box.keypress(size, primary_key_for_command("CYCLE_COMPOSE_FOCUS"))
+
+        # Arriving in the (empty) topic box lists every topic of the stream,
+        # most recent first, before anything is typed.
+        assert write_box.focus_position == write_box.FOCUS_CONTAINER_HEADER
+        assert write_box.header_write_box.focus_col == write_box.FOCUS_HEADER_BOX_TOPIC
+        write_box.model.topics_in_stream.assert_called_with(stream_id)
+        write_box.view.set_typeahead_footer.assert_called_once_with(topics, None, False)
+
+    def test_keypress_AUTOCOMPLETE_in_topic_box_not_overridden_by_preview(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        topics: List[str],
+    ) -> None:
+        self._open_stream_compose_focused_on_topic(mocker, write_box, topics, "Hel")
+        size = widget_size(write_box)
+
+        write_box.keypress(size, primary_key_for_command("AUTOCOMPLETE"))
+
+        # AUTOCOMPLETE still inserts the first match, and the preview does not
+        # replace the footer which highlights it.
+        assert write_box.title_write_box.edit_text == "Hello there!"
+        write_box.view.set_typeahead_footer.assert_called_once_with(
+            ["Hello there!", "Hello t/here!", "Hello from out-er_space!"], 0, False
+        )
+
+    @pytest.mark.parametrize(
+        "key, reporting_method",
+        [
+            (primary_key_for_command("SEND_MESSAGE"), "send_stream_message"),
+            (primary_key_for_command("SAVE_AS_DRAFT"), "save_draft"),
+        ],
+    )
+    def test_keypress_command_in_topic_box_leaves_footer_to_command(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        topics: List[str],
+        key: str,
+        reporting_method: str,
+    ) -> None:
+        self._open_stream_compose_focused_on_topic(mocker, write_box, topics, "Topic ")
+        write_box.model.session_draft_message.return_value = None
+        size = widget_size(write_box)
+        write_box.keypress(size, "1")  # The preview is now in the footer
+        write_box.view.set_typeahead_footer.reset_mock()
+
+        write_box.keypress(size, key)
+
+        # These commands report their outcome in the footer (eg. an error from
+        # the server, or that a draft was saved), which the topic preview must
+        # not replace.
+        getattr(write_box.model, reporting_method).assert_called_once()
+        write_box.view.set_typeahead_footer.assert_not_called()
+
+    def test_keypress_topic_box_no_preview_without_stream(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        topics: List[str],
+    ) -> None:
+        # Compose opened outside a stream narrow, with the stream still to be
+        # entered; the topic box can be reached with the arrow keys or mouse.
+        self._open_stream_compose_focused_on_topic(
+            mocker, write_box, topics, stream_id=0
+        )
+        size = widget_size(write_box)
+
+        write_box.keypress(size, "a")
+
+        assert write_box.title_write_box.edit_text == "a"
+        write_box.model.topics_in_stream.assert_not_called()
+        write_box.view.set_typeahead_footer.assert_not_called()
+
+    def test_keypress_vim_normal_footer_restored_after_topic_box(
+        self,
+        mocker: MockerFixture,
+        write_box: WriteBox,
+        widget_size: Callable[[Widget], urwid_Size],
+        topics: List[str],
+    ) -> None:
+        self._open_stream_compose_focused_on_body(mocker, write_box)
+        write_box.model.stream_id_from_name.return_value = 1
+        write_box.model.topics_in_stream.return_value = topics
+        size = widget_size(write_box)
+        cycle_focus_key = primary_key_for_command("CYCLE_COMPOSE_FOCUS")
+        write_box.keypress(size, "esc")  # Body enters normal mode
+        write_box.keypress(size, cycle_focus_key)  # To the stream box
+        write_box.keypress(size, cycle_focus_key)  # To the topic box
+        write_box.view.set_typeahead_footer.assert_called_once()
+
+        write_box.keypress(size, cycle_focus_key)  # Back to the body
+
+        # The topic preview replaced the NORMAL indicator in the footer, so it
+        # is shown again on returning to the body, which is still in normal mode.
+        assert write_box.msg_write_box.vim_mode == "normal"
+        footer_markup = write_box.view.set_footer_text.call_args[0][0]
+        assert any("NORMAL" in str(part) for part in footer_markup)
 
     def _open_stream_compose_focused_on_body(
         self,
@@ -2305,6 +2521,8 @@ class TestWriteBox:
             write_box.header_write_box.focus_col = focus_val(initial_focus_col_name)
         write_box.model.get_invalid_recipient_emails.return_value = []
         write_box.model.user_dict = mocker.MagicMock()
+        # Moving into the topic box lists the stream's topics in the footer.
+        write_box.model.topics_in_stream.return_value = []
 
         write_box.keypress(size, tab_key)
 

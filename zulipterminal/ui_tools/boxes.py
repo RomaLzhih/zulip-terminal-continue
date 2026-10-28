@@ -1002,6 +1002,9 @@ class WriteBox(urwid.Pile):
 
     def _set_default_footer_after_autocomplete(self) -> None:
         self.is_in_typeahead_mode = False
+        # The footer no longer shows the NORMAL indicator, so the message body
+        # must put it back on its next keypress if it is still in normal mode.
+        self._vim_normal_footer_shown = False
         self.view.set_footer_text()
 
     def _refresh_autocomplete_footer_preview(self) -> None:
@@ -1029,6 +1032,54 @@ class WriteBox(urwid.Pile):
             self.generic_autocomplete(token, None)
         elif self.is_in_typeahead_mode:
             self._set_default_footer_after_autocomplete()
+
+    def _refresh_topic_footer_preview(self) -> None:
+        """
+        List the stream's existing topics which match the topic box in the
+        footer, as the message body does for a mention, so that a topic which
+        is already there shows up (AUTOCOMPLETE inserts it) before a near miss
+        starts a new one. The whole box is the token, so an empty box lists
+        the most recent topics.
+        """
+        if not self.stream_id:
+            # No stream chosen yet (compose opened outside a stream narrow), so
+            # there are no topics to list; fetching those of stream 0 would
+            # only report an error on every keystroke.
+            return
+        topic_box = self.title_write_box
+        self._topic_box_autocomplete(topic_box.edit_text[: topic_box.edit_pos], None)
+
+    def _focused_topic_box_state(self) -> Optional[Tuple[str, int]]:
+        """The topic box's text and caret position if it has the focus."""
+        if (
+            self.compose_box_status != "open_with_stream"
+            or len(self.contents) == 0
+            or self.focus_position != self.FOCUS_CONTAINER_HEADER
+            or self.header_write_box.focus_col != self.FOCUS_HEADER_BOX_TOPIC
+        ):
+            return None
+        return self.title_write_box.edit_text, self.title_write_box.edit_pos
+
+    def _update_topic_box_footer(
+        self,
+        is_autocomplete_key: bool,
+        topic_box_state_before_key: Optional[Tuple[str, int]],
+    ) -> None:
+        """
+        Refresh the topic preview after a keypress which edited the topic box,
+        moved its caret or moved the focus into it. Every other key leaves the
+        footer alone: the AUTOCOMPLETE keys set it (with a selection)
+        themselves, and commands such as SEND_MESSAGE or SAVE_AS_DRAFT report
+        their outcome there.
+        """
+        if is_autocomplete_key:
+            return
+        topic_box_state = self._focused_topic_box_state()
+        if (
+            topic_box_state is not None
+            and topic_box_state != topic_box_state_before_key
+        ):
+            self._refresh_topic_footer_preview()
 
     def _msg_box_focused(self) -> bool:
         """Whether the message body box is the currently focused compose box."""
@@ -1115,6 +1166,7 @@ class WriteBox(urwid.Pile):
         is_autocomplete_key = is_command_key("AUTOCOMPLETE", key) or is_command_key(
             "AUTOCOMPLETE_REVERSE", key
         )
+        topic_box_state_before_key = self._focused_topic_box_state()
         if self.is_in_typeahead_mode and not is_autocomplete_key:
             # As is, this exits autocomplete even if the user chooses to resume compose.
             # Including a check for "EXIT_COMPOSE" in the above logic would avoid
@@ -1336,6 +1388,7 @@ class WriteBox(urwid.Pile):
                         self.stream_id = self.model.stream_id_from_name(stream_name)
 
                         header.focus_col = self.FOCUS_HEADER_BOX_TOPIC
+                        self._refresh_topic_footer_preview()
                         return key
                     elif (
                         header.focus_col == self.FOCUS_HEADER_BOX_TOPIC
@@ -1349,6 +1402,7 @@ class WriteBox(urwid.Pile):
                             self.focus_position = self.FOCUS_CONTAINER_MESSAGE
                         else:
                             header.focus_col = self.FOCUS_HEADER_BOX_TOPIC
+                            self._refresh_topic_footer_preview()
                         return key
                     else:
                         header.focus_col = self.FOCUS_HEADER_BOX_STREAM
@@ -1381,8 +1435,9 @@ class WriteBox(urwid.Pile):
 
         # After the child edit box has processed the key, keep the footer in
         # sync with the message body (vim NORMAL indicator or live autocomplete
-        # preview).
+        # preview) or with the topic box (its live topic preview).
         self._update_message_body_footer(is_autocomplete_key)
+        self._update_topic_box_footer(is_autocomplete_key, topic_box_state_before_key)
 
         return key
 

@@ -521,6 +521,40 @@ unread indicator (`~/.config/tmux/zulip-unread.sh`) reads the same file.
   keeps it distinct, and that re-encodes *every* ctrl key (`ctrl c` arrives as
   `CSI 27;5;99~` and no longer raises SIGINT), none of which urwid 2.1.2
   decodes.
+- `ui_tools/boxes.py: WriteBox._refresh_topic_footer_preview` /
+  `_update_topic_box_footer` — the **topic box** gets the live autocomplete
+  preview too, so that an existing topic is in view (and `ctrl n` inserts it)
+  before a near miss starts a new topic by accident. While the box has the
+  focus, the stream's topics matching the text before the caret are listed in
+  the footer with nothing selected, as `@`/`#`/`:` tokens are in the body; Tab
+  into an empty box lists the most recent topics (the topic index is kept most
+  recent first) before anything is typed. Unlike the body, the preview is
+  refreshed only after a key which **changed the topic box** (text or caret)
+  or moved the focus into it: the topic box always has something to preview,
+  so refreshing after every key would replace what `SEND_MESSAGE` /
+  `SAVE_AS_DRAFT` report in the footer (a server error, "Saved message as
+  draft"). A key which changes nothing (`up`, say) just clears the preview
+  until the next edit. `keypress` compares `_focused_topic_box_state()` from
+  before and after the key; the two `CYCLE_COMPOSE_FOCUS` branches which move
+  the focus to the topic box and `return` early refresh it themselves. With no
+  stream chosen yet (`stream_id == 0`: compose opened outside a stream narrow,
+  topic box reached by arrow key or mouse) nothing is previewed, since asking
+  for the topics of stream 0 errors on every keystroke.
+  `_set_default_footer_after_autocomplete` now clears `_vim_normal_footer_shown`,
+  which means "the footer shows NORMAL" but stayed set when a typeahead footer
+  replaced the indicator — so going back to a normal-mode body from the topic
+  box left the footer without it (as `ctrl n` in normal mode already did).
+  **Known gap, not fixed** (upstream, and shared with `ctrl n`): the topics are
+  those of `self.stream_id`, which only Tab out of the stream box updates.
+  Change the stream, then reach the topic box with `right` or the mouse, and
+  the previous stream's topics are listed. Tested in
+  `tests/ui_tools/test_boxes.py::TestWriteBox` (`test_keypress_topic_box_*`,
+  `test_keypress_CYCLE_COMPOSE_FOCUS_into_topic_box_shows_topic_preview`,
+  `test_keypress_AUTOCOMPLETE_in_topic_box_not_overridden_by_preview`,
+  `test_keypress_command_in_topic_box_leaves_footer_to_command`,
+  `test_keypress_vim_normal_footer_restored_after_topic_box`). The upstream
+  `test_keypress_CYCLE_COMPOSE_FOCUS` now gives `topics_in_stream` a list, as
+  moving into the topic box looks the topics up.
 
 ## Testing
 
