@@ -833,7 +833,9 @@ def process_media(controller: Any, link: str) -> None:
         controller.report_error("Media not supported for this platform")
         return
 
-    controller.show_media_confirmation_popup(open_media, tool, media_path)
+    # Fork: open it straight away; upstream asked first, in a popup, whether to
+    # open it with this tool - an extra keypress for every attachment.
+    open_media(controller, tool, media_path)
 
 
 def download_media(
