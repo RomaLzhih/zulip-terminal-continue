@@ -103,6 +103,33 @@ def test_commands_for_random_tips(mocker: MockerFixture) -> None:
     assert new_key_bindings["GAMMA"] in result
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        command
+        for command, binding in keys.KEY_BINDINGS.items()
+        if binding["key_category"] == "general"
+    ],
+)
+def test_general_key_means_the_same_outside_the_editor(command: str) -> None:
+    # A key under "General" in the help menu reads as working anywhere, so a key
+    # which only works in one popup belongs in that popup's category instead:
+    # copying the About menu with 'c' was listed here, and in the message list
+    # 'c' composes. The editor is a mode of its own, with its own categories.
+    editor_categories = {"compose_box", "editor_navigation", "editor_text_manipulation"}
+    general_keys = set(keys.keys_for_command(command))
+
+    rebound_by = [
+        other_command
+        for other_command, binding in keys.KEY_BINDINGS.items()
+        if other_command != command
+        and binding["key_category"] not in editor_categories
+        and general_keys & set(binding["keys"])
+    ]
+
+    assert rebound_by == []
+
+
 def test_updated_urwid_command_map() -> None:
     urwid_to_zt_mapping = {v: k for k, v in keys.ZT_TO_URWID_CMD_MAPPING.items()}
     # Check if keys in command map are actually the ones in KEY_BINDINGS

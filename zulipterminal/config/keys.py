@@ -54,13 +54,13 @@ KEY_BINDINGS: Dict[str, KeyBinding] = {
     'COPY_ABOUT_INFO': {
         'keys': ['c'],
         'help_text': 'Copy information from About Menu to clipboard',
-        'key_category': 'general',
+        'key_category': 'about_menu',
     },
     'COPY_TRACEBACK': {
         'keys': ['c'],
         'help_text': 'Copy traceback from Exception Popup to clipboard',
         'excluded_from_random_tips': True,
-        'key_category': 'general',
+        'key_category': 'exception_popup',
     },
     'EXIT_POPUP': {
         'keys': ['esc'],
@@ -505,6 +505,10 @@ HELP_CATEGORIES = {
         f"Message information (press {KEY_BINDINGS['MSG_INFO']['keys'][0]}"
         f" to view info of a message)"
     ),
+    # Fork: like the two above, keys which only work inside one popup are listed
+    # under it, not under "general" - there, 'c' looked like a global copy key.
+    "about_menu": f"About menu (press {KEY_BINDINGS['ABOUT']['keys'][0]} to view it)",
+    "exception_popup": "Exception popup (shown after an unexpected error)",
 }
 
 ZT_TO_URWID_CMD_MAPPING = {

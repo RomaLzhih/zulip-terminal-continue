@@ -8,8 +8,6 @@
 |Show/hide Help Menu|<kbd>?</kbd>|
 |Show/hide Markdown Help Menu|<kbd>Meta</kbd> + <kbd>m</kbd>|
 |Show/hide About Menu|<kbd>Meta</kbd> + <kbd>?</kbd>|
-|Copy information from About Menu to clipboard|<kbd>c</kbd>|
-|Copy traceback from Exception Popup to clipboard|<kbd>c</kbd>|
 |Redraw screen|<kbd>Ctrl</kbd> + <kbd>l</kbd>|
 |Quit, or close the compose box if composing|<kbd>Ctrl</kbd> + <kbd>c</kbd>|
 |Restart Zulip Terminal in place|<kbd>Ctrl</kbd> + <kbd>x</kbd>|
@@ -140,4 +138,14 @@
 |View current message in browser|<kbd>v</kbd>|
 |Show/hide full rendered message|<kbd>f</kbd>|
 |Show/hide full raw message|<kbd>r</kbd>|
+
+## About menu (press meta ? to view it)
+|Command|Key Combination|
+| :--- | :---: |
+|Copy information from About Menu to clipboard|<kbd>c</kbd>|
+
+## Exception popup (shown after an unexpected error)
+|Command|Key Combination|
+| :--- | :---: |
+|Copy traceback from Exception Popup to clipboard|<kbd>c</kbd>|
 
